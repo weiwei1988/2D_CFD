@@ -1,0 +1,13 @@
+.control-panel{max-height:calc(100vh - 76px);overflow-y:auto;scrollbar-width:thin}
+.geometry-controls{margin-top:20px;border-top:1px solid var(--line);padding-top:15px}
+.geometry-controls summary{cursor:pointer;color:#afc2d0;font-size:9px;letter-spacing:.14em;font-weight:750;list-style:none;display:flex;align-items:center;justify-content:space-between}
+.geometry-controls summary::-webkit-details-marker{display:none}
+.geometry-controls summary::after{content:'−';color:var(--cyan);font-size:13px}
+.geometry-controls:not([open]) summary::after{content:'+'}
+.geometry-controls .control-block{margin-top:13px}
+.geometry-controls .control-block b{font-size:10px;font-weight:500}
+.geometry-controls .control-block output{font-size:14px}
+.geometry-controls input[type=range]{margin:8px 0 1px}
+.text-button{width:100%;margin-top:13px;border:1px solid var(--line);background:transparent;border-radius:4px;padding:6px;color:var(--muted);font-size:9px;cursor:pointer}
+.text-button:hover{color:var(--cyan);border-color:rgba(80,216,244,.55)}
+.quality-label{color:#6f8c9e;font-size:8px;margin-left:8px;white-space:nowrap}

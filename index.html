@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Transonic Flow Lab — 2D Supercritical Airfoil CFD</title>
+  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="geometry.css">
+  <link rel="stylesheet" href="analysis-views.css">
+  <link rel="stylesheet" href="equal-columns.css">
+  <link rel="stylesheet" href="airfoil-presets.css">
+</head>
+<body>
+  <main class="app-shell">
+    <header class="topbar">
+      <div><p class="eyebrow">COMPRESSIBLE FLOW / 2D</p><h1>Transonic Flow Lab</h1></div>
+      <div class="dashboard-label">UNIFIED ANALYSIS DESK</div>
+      <div class="solver-state"><span id="statusDot" class="status-dot"></span><div><strong id="statusText">初期化中</strong><small id="iterationText">ITER 0 · t* 0.000</small></div></div>
+    </header>
+
+    <section class="unified-dashboard">
+      <aside class="dashboard-panel geometry-window" aria-labelledby="geometryWindowTitle">
+        <header class="window-header"><div><span class="window-kicker">SECTION DESIGN</span><h2 id="geometryWindowTitle">翼型ジオメトリー</h2></div><span class="live-tag">LIVE</span></header>
+        <div class="window-body geometry-body">
+          <div class="geometry-metrics" aria-live="polite"><article><span>MAX THICKNESS</span><strong id="geomThicknessMetric">—</strong></article><article><span>MAX CAMBER</span><strong id="geomCamberMetric">—</strong></article><article><span>SECTION AREA</span><strong id="geomAreaMetric">—</strong></article><article><span>LE RADIUS</span><strong id="geomLeadingMetric">—</strong></article></div>
+          <article class="embedded-card geometry-preview">
+            <div class="embedded-header"><div><span>SECTION OVERLAY</span><small>x/c–y/c · 基準形状との比較</small></div><div class="geometry-legend"><span><i class="baseline"></i>基準</span><span><i class="current"></i>現在</span><span><i class="camber"></i>キャンバー</span></div></div>
+            <canvas id="geometryCanvas" aria-label="パラメトリック翼型の二次元形状"></canvas>
+          </article>
+          <article class="embedded-card leading-edge-preview">
+            <div class="embedded-header"><div><span>LEADING EDGE DETAIL</span><small>前縁 0–12%c · 独立拡大図</small></div><div class="geometry-legend"><span><i class="baseline"></i>基準</span><span><i class="current"></i>現在</span></div></div>
+            <canvas id="leadingEdgeCanvas" aria-label="翼型前縁形状の独立拡大図"></canvas>
+          </article>
+          <div class="preset-picker">
+            <label for="airfoilPreset">STANDARD AIRFOIL</label>
+            <select id="airfoilPreset">
+              <option value="supercritical-baseline" selected>Supercritical baseline 12%</option>
+              <optgroup label="NACA 4-digit">
+                <option value="naca0009">NACA 0009</option>
+                <option value="naca0012">NACA 0012</option>
+                <option value="naca0015">NACA 0015</option>
+                <option value="naca2412">NACA 2412</option>
+                <option value="naca4412">NACA 4412</option>
+              </optgroup>
+              <optgroup label="Supercritical — parametric approximation">
+                <option value="sc20412">NASA SC(2)-0412 相当</option>
+                <option value="sc20612">NASA SC(2)-0612 相当</option>
+                <option value="rae2822">RAE 2822 相当</option>
+              </optgroup>
+              <option value="custom">カスタム</option>
+            </select>
+            <p id="airfoilPresetNote">基準スーパクリティカル翼型 · 12%厚のパラメトリック形状</p>
+          </div>
+          <div class="parameter-heading"><span>FINE TUNING</span><button id="geometryReset" class="text-button inline-reset" type="button">基準翼型へ戻す</button></div>
+          <label class="control-block compact-control" for="thicknessSlider"><span><b>翼厚比 t/c</b><output id="thicknessOutput">12%</output></span><input id="thicknessSlider" type="range" min="8" max="18" step="1" value="12"><span class="range-labels"><i>8%</i><i>18%</i></span></label>
+          <label class="control-block compact-control" for="leadingEdgeSlider"><span><b>前縁半径係数</b><output id="leadingEdgeOutput">1.0×</output></span><input id="leadingEdgeSlider" type="range" min="0.6" max="1.6" step="0.1" value="1"><span class="range-labels"><i>尖</i><i>丸</i></span></label>
+          <label class="control-block compact-control" for="camberSlider"><span><b>最大キャンバー</b><output id="camberOutput">2.2%</output></span><input id="camberSlider" type="range" min="0" max="6" step="0.1" value="2.2"><span class="range-labels"><i>0%</i><i>6%</i></span></label>
+          <label class="control-block compact-control" for="camberPositionSlider"><span><b>キャンバー位置</b><output id="camberPositionOutput">42%c</output></span><input id="camberPositionSlider" type="range" min="25" max="65" step="1" value="42"><span class="range-labels"><i>25%c</i><i>65%c</i></span></label>
+          <label class="control-block compact-control" for="flatteningSlider"><span><b>上面平坦度</b><output id="flatteningOutput">1.0%</output></span><input id="flatteningSlider" type="range" min="0" max="2" step="0.1" value="1"><span class="range-labels"><i>0%</i><i>2%</i></span></label>
+          <p class="design-note">形状変更時は流れ場と収束履歴を再初期化します。</p>
+        </div>
+      </aside>
+
+      <section class="dashboard-panel flow-window" aria-labelledby="flowWindowTitle">
+        <header class="window-header flow-window-header"><div><span class="window-kicker">AERODYNAMIC FIELD</span><h2 id="flowWindowTitle">空力・流れ場</h2></div><div class="segmented field-strip" role="group" aria-label="可視化する物理量"><button type="button" data-field="mach" class="active">Mach</button><button type="button" data-field="schlieren">Schlieren</button><button type="button" data-field="velocity">速度</button><button type="button" data-field="pressure">圧力</button><button type="button" data-field="density">密度</button><button type="button" data-field="vorticity">渦度</button></div></header>
+        <div class="window-body flow-body">
+          <div class="flight-bar">
+            <label class="control-block flight-control" for="aoaSlider"><span><b>迎角</b><output id="aoaOutput">2°</output></span><input id="aoaSlider" type="range" min="-10" max="50" step="1" value="2"><span class="range-labels"><i>−10°</i><i>50°</i></span></label>
+            <label class="control-block flight-control" for="machSlider"><span><b>Mach 数</b><output id="machOutput">0.90</output></span><input id="machSlider" type="range" min="0.3" max="1.2" step="0.01" value="0.9"><span class="range-labels"><i>0.30</i><i>1.20</i></span></label>
+            <div class="flight-actions"><button id="resetButton" class="icon-button" type="button" title="流れ場を初期化">↻</button><button id="playButton" class="primary-button" type="button"><span id="playIcon">Ⅱ</span><span id="playLabel">一時停止</span></button><label class="speed-control">格子<select id="gridSelect"><option value="96x48">省電力 96×48</option><option value="128x64" selected>標準 128×64</option><option value="160x72">精細 160×72</option></select></label><label class="speed-control">速度<select id="speedSelect"><option value="1" selected>1×</option><option value="2">2×</option><option value="4">4×</option></select></label></div>
+          </div>
+          <div class="metric-strip" aria-live="polite"><article><span>C<sub>L</sub></span><strong id="clValue">0.000</strong><small>揚力係数</small></article><article><span>C<sub>D</sub></span><strong id="cdValue">0.000</strong><small>抗力係数</small></article><article><span>C<sub>m,¼</sub></span><strong id="cmValue">0.000</strong><small>縦揺れモーメント</small></article><article><span>x<sub>cp</sub>/c</span><strong id="cpValue">—</strong><small>圧力中心</small></article></div>
+          <div class="flow-card">
+            <div class="flow-toolbar"><div><span id="fieldTitle">局所 Mach 数</span><small id="flowSubtitle">M∞ 0.90 · α 2°</small></div><div class="legend"><span id="legendMin">0.00</span><canvas id="colorbar" width="160" height="8"></canvas><span id="legendMax">1.45</span></div></div>
+            <div class="canvas-wrap"><canvas id="flowCanvas" aria-label="翼面適合O格子上の翼周り流れ場"></canvas><div class="domain-tag inlet">FAR FIELD</div><div class="domain-tag outlet">FAR FIELD</div><div id="shockBadge" class="shock-badge hidden">SHOCK</div></div>
+            <div class="flow-footer"><span id="cflText">CFL 0.38</span><span id="residualText">ΔU 0.00e+0</span><span>白破線: M = 1</span></div>
+          </div>
+          <div class="lower-grid">
+            <article class="chart-card"><div class="card-title"><div><span>SURFACE PRESSURE</span><small>Cp 分布 · 負圧上向き · 翼面外挿</small></div><div class="chart-legend"><i class="upper"></i>上面 <i class="lower"></i>下面 <span id="cpQuality" class="quality-label">局所平滑 −0%</span></div></div><canvas id="cpCanvas" aria-label="負圧側を上に表示した翼面Cp分布"></canvas></article>
+            <article class="section-card"><div class="card-title"><div><span>CENTER OF PRESSURE</span><small>圧力合力の作用位置</small></div></div><canvas id="sectionCanvas" aria-label="翼型と圧力中心"></canvas><div class="section-readout"><span>LE</span><b id="cpReadout">Cl不足</b><span>TE</span></div></article>
+          </div>
+          <div id="modelLine" class="model-line">翼面適合O格子 · 128 × 64 · C++/WebAssembly · HLL有限体積法 · Re = 50,000 · γ = 1.4</div>
+        </div>
+      </section>
+
+      <aside class="dashboard-panel convergence-window" aria-labelledby="convergenceWindowTitle">
+        <header class="window-header"><div><span class="window-kicker">ITERATION HISTORY</span><h2 id="convergenceWindowTitle">収束ログ</h2></div><b id="convStatus" class="convergence-status">計算中</b></header>
+        <div class="window-body convergence-body">
+          <p id="convCondition" class="condition-line">M∞ 0.90 · α 2°</p>
+          <div class="convergence-metrics" aria-live="polite"><article><span>EPOCH</span><strong id="convEpoch">0</strong></article><article><span>RESIDUAL</span><strong id="convResidual">—</strong></article><article><span>CL DRIFT / 100</span><strong id="convClDrift">—</strong></article></div>
+          <article class="convergence-card"><header><div><span>RESIDUAL</span><small>平均運動量更新 · 対数軸</small></div></header><canvas id="residualCanvas" aria-label="epochに対する残差履歴"></canvas></article>
+          <article class="convergence-card"><header><div><span>COEFFICIENTS</span><small>CL · CD · Cm,¼</small></div><div class="chart-key"><span><i class="cl"></i>CL</span><span><i class="cd"></i>CD</span><span><i class="cm"></i>Cm</span></div></header><canvas id="coefficientCanvas" aria-label="epochに対する空力係数履歴"></canvas></article>
+          <article class="convergence-card"><header><div><span>TRANSONIC FEATURES</span><small>衝撃波位置 · 最大局所Mach</small></div><div class="chart-key"><span><i class="shock"></i>x/c</span><span><i class="mach"></i>Mmax</span></div></header><canvas id="shockHistoryCanvas" aria-label="epochに対する衝撃波位置と最大Mach数"></canvas></article>
+          <p class="history-note">10 iterationごとに記録。飛行条件または翼型変更時に履歴を更新します。</p>
+        </div>
+      </aside>
+    </section>
+  </main>
+  <script src="cfd-core.js?v=cpp-20260830-1"></script>
+  <script src="solver.js?v=cpp-20260830-1"></script>
+  <script src="app.js?v=cpp-20260830-1"></script>
+  <script src="geometry-controls.js?v=cpp-20260830-1"></script>
+  <script src="analysis-views.js?v=cpp-20260830-1"></script>
+</body>
+</html>

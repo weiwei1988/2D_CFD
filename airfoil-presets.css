@@ -1,0 +1,5 @@
+.preset-picker{margin-top:11px;padding:10px;border:1px solid var(--line);background:rgba(80,216,244,.035)}
+.preset-picker label{display:block;color:#a9bdca;font-size:8px;font-weight:750;letter-spacing:.12em}
+.preset-picker select{display:block;width:100%;margin-top:7px;padding:8px 9px;border:1px solid rgba(80,216,244,.32);border-radius:4px;background:#101e2b;color:var(--text);font-size:10px;cursor:pointer}
+.preset-picker p{min-height:24px;margin:7px 0 0;color:#7890a2;font-size:8px;line-height:1.5}
+@media(pointer:coarse){.preset-picker select{min-height:44px;font-size:16px}}
