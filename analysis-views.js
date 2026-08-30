@@ -51,7 +51,7 @@
     drawChart($('coefficientCanvas'),h,[{label:'CL',color:'#50d8f4',get:d=>d.cl},{label:'CD',color:'#ffad72',get:d=>d.cd},{label:'Cm',color:'#a78bfa',get:d=>d.cm}],{includeZero:true,yLabel:'coefficient',decimals:3});
     drawChart($('shockHistoryCanvas'),h,[{label:'shock x/c',color:'#ff8a47',get:d=>d.shockX},{label:'Mlocal,max',color:'#59d6a2',get:d=>d.maxMach}],{domain:[0,1.5],yLabel:'x/c  or  Mach',decimals:2});
     $('convEpoch').textContent=state.iteration.toLocaleString();$('convResidual').textContent=state.residual>0?state.residual.toExponential(2):'—';$('convClDrift').textContent=Number.isFinite(clDrift)?clDrift.toExponential(2):'—';
-    const status=!reference?'履歴蓄積中':state.residual<1e-5&&clDrift<.002?'準定常':state.residual<1e-4&&clDrift<.01?'収束傾向':'時間発展中';$('convStatus').textContent=status;$('convCondition').textContent=`M∞ ${state.mach.toFixed(2)} · α ${state.aoa.toFixed(0)}° · t* ${state.time.toFixed(3)}`;
+    const status=!reference?'履歴蓄積中':state.residual<1e-5&&clDrift<.002?'準定常':state.residual<1e-4&&clDrift<.01?'収束傾向':'時間発展中';$('convStatus').textContent=status;$('convCondition').textContent=`M∞ ${state.mach.toFixed(2)} · α ${state.aoa.toFixed(1)}° · t* ${state.time.toFixed(3)}`;
   }
 
   function queueDraw(){if(drawQueued)return;drawQueued=true;requestAnimationFrame(()=>{drawQueued=false;drawGeometry();drawConvergence()})}

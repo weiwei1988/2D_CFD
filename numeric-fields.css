@@ -1,0 +1,11 @@
+/* スライダー横の半角数字入力。既存の output と同じ見た目のまま編集可能にする。 */
+.value-field{display:inline-flex;align-items:baseline;gap:2px;color:var(--cyan);font-family:"SF Mono",monospace;white-space:nowrap}
+.value-field input{width:4.6ch;margin:0;padding:0 2px 1px;border:0;border-bottom:1px dashed rgba(80,216,244,.38);border-radius:0;background:transparent;color:inherit;font:inherit;text-align:right;-webkit-appearance:none;appearance:none}
+.value-field input:hover{border-bottom-color:rgba(80,216,244,.7)}
+.value-field input:focus{outline:none;border-bottom-style:solid;border-bottom-color:var(--cyan);background:rgba(80,216,244,.09)}
+.value-field.wide input{width:8.4ch}
+.value-field i{font-style:normal;opacity:.72;font-size:.72em}
+.control-block .value-field{font-size:20px}
+.compact-control .value-field{font-size:13px}
+.flight-control .value-field{font-size:14px}
+@media(pointer:coarse){.value-field input{min-height:28px}}

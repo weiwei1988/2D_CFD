@@ -10,6 +10,7 @@
   <link rel="stylesheet" href="equal-columns.css">
   <link rel="stylesheet" href="airfoil-presets.css">
   <link rel="stylesheet" href="flow-parameters.css">
+  <link rel="stylesheet" href="numeric-fields.css">
 </head>
 <body>
   <main class="app-shell">
@@ -53,11 +54,11 @@
             <p id="airfoilPresetNote">基準スーパクリティカル翼型 · 12%厚のパラメトリック形状</p>
           </div>
           <div class="parameter-heading"><span>FINE TUNING</span><button id="geometryReset" class="text-button inline-reset" type="button">基準翼型へ戻す</button></div>
-          <label class="control-block compact-control" for="thicknessSlider"><span><b>翼厚比 t/c</b><output id="thicknessOutput">12%</output></span><input id="thicknessSlider" type="range" min="8" max="18" step="1" value="12"><span class="range-labels"><i>8%</i><i>18%</i></span></label>
-          <label class="control-block compact-control" for="leadingEdgeSlider"><span><b>前縁半径係数</b><output id="leadingEdgeOutput">1.0×</output></span><input id="leadingEdgeSlider" type="range" min="0.6" max="1.6" step="0.1" value="1"><span class="range-labels"><i>尖</i><i>丸</i></span></label>
-          <label class="control-block compact-control" for="camberSlider"><span><b>最大キャンバー</b><output id="camberOutput">2.2%</output></span><input id="camberSlider" type="range" min="0" max="6" step="0.1" value="2.2"><span class="range-labels"><i>0%</i><i>6%</i></span></label>
-          <label class="control-block compact-control" for="camberPositionSlider"><span><b>キャンバー位置</b><output id="camberPositionOutput">42%c</output></span><input id="camberPositionSlider" type="range" min="25" max="65" step="1" value="42"><span class="range-labels"><i>25%c</i><i>65%c</i></span></label>
-          <label class="control-block compact-control" for="flatteningSlider"><span><b>上面平坦度</b><output id="flatteningOutput">1.0%</output></span><input id="flatteningSlider" type="range" min="0" max="2" step="0.1" value="1"><span class="range-labels"><i>0%</i><i>2%</i></span></label>
+          <label class="control-block compact-control" for="thicknessSlider"><span><b>翼厚比 t/c</b><span class="value-field"><input id="thicknessInput" type="text" inputmode="decimal" autocomplete="off" spellcheck="false" aria-label="翼厚比を数値で入力" value="12.0"><i>%</i></span></span><input id="thicknessSlider" type="range" min="8" max="18" step="0.1" value="12"><span class="range-labels"><i>8%</i><i>18%</i></span></label>
+          <label class="control-block compact-control" for="leadingEdgeSlider"><span><b>前縁半径係数</b><span class="value-field"><input id="leadingEdgeInput" type="text" inputmode="decimal" autocomplete="off" spellcheck="false" aria-label="前縁半径係数を数値で入力" value="1.00"><i>×</i></span></span><input id="leadingEdgeSlider" type="range" min="0.6" max="1.6" step="0.05" value="1"><span class="range-labels"><i>尖</i><i>丸</i></span></label>
+          <label class="control-block compact-control" for="camberSlider"><span><b>最大キャンバー</b><span class="value-field"><input id="camberInput" type="text" inputmode="decimal" autocomplete="off" spellcheck="false" aria-label="最大キャンバーを数値で入力" value="2.2"><i>%</i></span></span><input id="camberSlider" type="range" min="0" max="6" step="0.1" value="2.2"><span class="range-labels"><i>0%</i><i>6%</i></span></label>
+          <label class="control-block compact-control" for="camberPositionSlider"><span><b>キャンバー位置</b><span class="value-field"><input id="camberPositionInput" type="text" inputmode="decimal" autocomplete="off" spellcheck="false" aria-label="キャンバー位置を数値で入力" value="42.0"><i>%c</i></span></span><input id="camberPositionSlider" type="range" min="25" max="65" step="0.5" value="42"><span class="range-labels"><i>25%c</i><i>65%c</i></span></label>
+          <label class="control-block compact-control" for="flatteningSlider"><span><b>上面平坦度</b><span class="value-field"><input id="flatteningInput" type="text" inputmode="decimal" autocomplete="off" spellcheck="false" aria-label="上面平坦度を数値で入力" value="1.0"><i>%</i></span></span><input id="flatteningSlider" type="range" min="0" max="2" step="0.1" value="1"><span class="range-labels"><i>0%</i><i>2%</i></span></label>
           <p class="design-note">形状変更時は流れ場と収束履歴を再初期化します。</p>
         </div>
       </aside>
@@ -66,9 +67,9 @@
         <header class="window-header flow-window-header"><div><span class="window-kicker">AERODYNAMIC FIELD</span><h2 id="flowWindowTitle">空力・流れ場</h2></div><div class="segmented field-strip" role="group" aria-label="可視化する物理量"><button type="button" data-field="mach" class="active">Mach</button><button type="button" data-field="schlieren">Schlieren</button><button type="button" data-field="velocity">速度</button><button type="button" data-field="pressure">圧力</button><button type="button" data-field="density">密度</button><button type="button" data-field="vorticity">渦度</button></div></header>
         <div class="window-body flow-body">
           <div class="flight-bar">
-            <label class="control-block flight-control" for="aoaSlider"><span><b>迎角</b><output id="aoaOutput">2°</output></span><input id="aoaSlider" type="range" min="-10" max="50" step="1" value="2"><span class="range-labels"><i>−10°</i><i>50°</i></span></label>
-            <label class="control-block flight-control" for="machSlider"><span><b>Mach 数</b><output id="machOutput">0.90</output></span><input id="machSlider" type="range" min="0.3" max="1.2" step="0.01" value="0.9"><span class="range-labels"><i>0.30</i><i>1.20</i></span></label>
-            <label class="control-block flight-control" for="reynoldsSlider"><span><b>Reynolds 数</b><output id="reynoldsOutput">5.0×10⁴</output></span><input id="reynoldsSlider" type="range" min="4" max="7" step="0.1" value="4.7"><span class="range-labels"><i>1.0×10⁴</i><i>1.0×10⁷</i></span></label>
+            <label class="control-block flight-control" for="aoaSlider"><span><b>迎角</b><span class="value-field"><input id="aoaInput" type="text" inputmode="decimal" autocomplete="off" spellcheck="false" aria-label="迎角を数値で入力" value="2.0"><i>°</i></span></span><input id="aoaSlider" type="range" min="-10" max="50" step="0.5" value="2"><span class="range-labels"><i>−10°</i><i>50°</i></span></label>
+            <label class="control-block flight-control" for="machSlider"><span><b>Mach 数</b><span class="value-field"><input id="machInput" type="text" inputmode="decimal" autocomplete="off" spellcheck="false" aria-label="Mach数を数値で入力" value="0.90"></span></span><input id="machSlider" type="range" min="0.3" max="1.2" step="0.01" value="0.9"><span class="range-labels"><i>0.30</i><i>1.20</i></span></label>
+            <label class="control-block flight-control" for="reynoldsSlider"><span><b>Reynolds 数</b><span class="value-field wide"><input id="reynoldsInput" type="text" inputmode="decimal" autocomplete="off" spellcheck="false" aria-label="Reynolds数を数値で入力" value="50000"></span></span><input id="reynoldsSlider" type="range" min="4" max="7" step="0.1" value="4.7"><span class="range-labels"><i>1.0×10⁴</i><i>1.0×10⁷</i></span></label>
             <label class="control-block flight-control friction-control" for="frictionSelect"><span><b>摩擦抗力モデル</b></span><select id="frictionSelect"><option value="turbulent">平板乱流 0.074/Re^0.2</option><option value="laminar">平板層流 1.328/√Re</option><option value="none">摩擦なし（圧力抗力のみ）</option></select><span class="range-labels"><i>C<sub>D</sub> = 圧力 + 摩擦</i></span></label>
             <div class="flight-actions"><button id="resetButton" class="icon-button" type="button" title="流れ場を初期化">↻</button><button id="playButton" class="primary-button" type="button"><span id="playIcon">Ⅱ</span><span id="playLabel">一時停止</span></button><label class="speed-control">格子<select id="gridSelect"><option value="96x48">省電力 96×48</option><option value="128x64" selected>標準 128×64</option><option value="160x72">精細 160×72</option></select></label><label class="speed-control">速度<select id="speedSelect"><option value="1" selected>1×</option><option value="2">2×</option><option value="4">4×</option></select></label></div>
           </div>
@@ -102,8 +103,9 @@
   </main>
   <script src="cfd-core.js?v=aero-20260830-2"></script>
   <script src="solver.js?v=aero-20260830-2"></script>
-  <script src="app.js?v=aero-20260830-2"></script>
-  <script src="geometry-controls.js?v=aero-20260830-2"></script>
-  <script src="analysis-views.js?v=aero-20260830-2"></script>
+  <script src="numeric-fields.js?v=numeric-20260830-3"></script>
+  <script src="app.js?v=numeric-20260830-3"></script>
+  <script src="geometry-controls.js?v=numeric-20260830-3"></script>
+  <script src="analysis-views.js?v=numeric-20260830-3"></script>
 </body>
 </html>

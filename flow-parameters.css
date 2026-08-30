@@ -2,6 +2,5 @@
 .flight-bar{align-items:end;row-gap:10px}
 .friction-control select{display:block;width:100%;margin:6px 0 0;padding:5px 8px;border:1px solid var(--line);border-radius:4px;background:#101e2b;color:var(--text);font-size:10px;cursor:pointer}
 .friction-control .range-labels{justify-content:flex-start;color:#60798c}
-.flight-control output{white-space:nowrap}
 .metric-strip small#cdBreakdown{display:block;white-space:pre-line;line-height:1.45;font-family:"SF Mono",monospace;letter-spacing:-.01em}
 @media(pointer:coarse){.friction-control select{min-height:44px;font-size:16px}}

@@ -12,8 +12,6 @@ window.cfdReady=(async function () {
   const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
   // スライダーは log10(Re)。仮数を1桁に丸めて 1.0/1.3/…/7.9 ×10^k のきりのよい値だけを返す。
   const reynoldsFromSlider=v=>{const e=Math.floor(v);return Math.round(Math.pow(10,v-e)*10)/10*Math.pow(10,e)};
-  const superscript=n=>String(n).replace(/[0-9]/g,d=>'⁰¹²³⁴⁵⁶⁷⁸⁹'[+d]);
-  const formatReynolds=re=>{const e=Math.floor(Math.log10(re)+1e-9);return `${(re/Math.pow(10,e)).toFixed(1)}×10${superscript(e)}`};
 
   function turbo(t){
     t=clamp(t,0,1);
@@ -121,22 +119,23 @@ window.cfdReady=(async function () {
 
   function updateUI(){
     const c=solver.coeffs,cp=Number.isFinite(c.cp)?c.cp:Math.abs(c.cl)>.05?.25-c.cm/c.cl:NaN,d=solver.diagnostics,quality=d.cpRoughnessRaw>0?Math.max(0,1-d.cpRoughnessFiltered/d.cpRoughnessRaw):0;if($("cpQuality"))$("cpQuality").textContent="局所平滑 −"+Math.round(quality*100)+"%";$('clValue').textContent=c.cl.toFixed(3);$('cdValue').textContent=c.cd.toFixed(3);if($('cdBreakdown'))$('cdBreakdown').textContent=`圧力 ${Math.max(c.cdPressure,0).toFixed(4)}\n摩擦 ${c.cdFriction.toFixed(4)}`;$('cmValue').textContent=c.cm.toFixed(3);$('cpValue').textContent=Number.isFinite(cp)?cp.toFixed(3):'—';$('cpReadout').textContent=Number.isFinite(cp)?`x/c = ${cp.toFixed(3)}${cp<0||cp>1?' · 翼弦外':''}`:'Cl不足';
-    $('cflText').textContent=`CFL ${solver.cfl.toFixed(2)}`;if($('modelLine')){const engine=solver.backend==='cpp-wasm'?'C++/WebAssembly':'JavaScript fallback';$('modelLine').textContent=`翼面適合O格子 · ${solver.nx} × ${solver.ny} · ${engine} · HLL有限体積法 · Re = ${Math.round(solver.reynolds).toLocaleString()} · 摩擦 ${CFDFrictionModels[solver.frictionModel].label} · γ = 1.4`;}$('iterationText').textContent=`ITER ${solver.iteration.toLocaleString()} · t* ${solver.time.toFixed(3)}`;$('residualText').textContent=`ΔU ${solver.residual.toExponential(2)}`;$('flowSubtitle').textContent=`M∞ ${solver.mach.toFixed(2)} · α ${solver.aoa}° · Mlocal,max ${d.maxSurfaceMach.toFixed(2)}`;
+    $('cflText').textContent=`CFL ${solver.cfl.toFixed(2)}`;if($('modelLine')){const engine=solver.backend==='cpp-wasm'?'C++/WebAssembly':'JavaScript fallback';$('modelLine').textContent=`翼面適合O格子 · ${solver.nx} × ${solver.ny} · ${engine} · HLL有限体積法 · Re = ${Math.round(solver.reynolds).toLocaleString()} · 摩擦 ${CFDFrictionModels[solver.frictionModel].label} · γ = 1.4`;}$('iterationText').textContent=`ITER ${solver.iteration.toLocaleString()} · t* ${solver.time.toFixed(3)}`;$('residualText').textContent=`ΔU ${solver.residual.toExponential(2)}`;$('flowSubtitle').textContent=`M∞ ${solver.mach.toFixed(2)} · α ${solver.aoa.toFixed(1)}° · Mlocal,max ${d.maxSurfaceMach.toFixed(2)}`;
   }
   function recordHistory(force=false){if(!force&&solver.iteration-lastHistoryIteration<10)return;lastHistoryIteration=solver.iteration;const d=solver.diagnostics,c=solver.coeffs;history.push({iteration:solver.iteration,time:solver.time,residual:solver.residual,cl:c.cl,cd:c.cd,cm:c.cm,shockX:d.shockDetected?d.shockX:NaN,maxMach:d.maxSurfaceMach});if(history.length>2400)history.splice(0,history.length-2400);window.dispatchEvent(new Event('cfdhistory'));}
   function clearHistory(){history.length=0;lastHistoryIteration=-10;recordHistory(true);}
   function render(){drawFlow();drawCp();drawSection();updateUI()}
   function loop(t){const stepInterval=120/speed;if(running&&t-lastStep>=stepInterval){solver.step();lastStep=t;recordHistory();}if(t-lastFrame>160){render();lastFrame=t}requestAnimationFrame(loop)}
-  function reset(){solver.reset(+$('machSlider').value,+$('aoaSlider').value);clearHistory();render()}
-  $('aoaSlider').addEventListener('input',e=>{$('aoaOutput').textContent=`${e.target.value}°`;reset()});
-  $('machSlider').addEventListener('input',e=>{$('machOutput').textContent=(+e.target.value).toFixed(2);reset()});
-  $('reynoldsSlider').addEventListener('input',e=>{const re=reynoldsFromSlider(+e.target.value);$('reynoldsOutput').textContent=formatReynolds(re);solver.setReynolds(re);clearHistory();render()});
+  function reset(){solver.reset(machField.value,aoaField.value);clearHistory();render()}
+  // スライダーと数値入力は CFDNumericField が同じ値へ束ねる。確定は slider の input と数値入力の change。
+  const aoaField=CFDNumericField({slider:$('aoaSlider'),field:$('aoaInput'),min:-10,max:50,step:.5,onChange:()=>reset()});
+  const machField=CFDNumericField({slider:$('machSlider'),field:$('machInput'),min:.3,max:1.2,step:.01,onChange:()=>reset()});
+  const reynoldsField=CFDNumericField({slider:$('reynoldsSlider'),field:$('reynoldsInput'),min:1e4,max:1e7,step:1,keyStep:1000,fromSlider:reynoldsFromSlider,toSlider:re=>Math.log10(re),onChange:re=>{solver.setReynolds(re);clearHistory();render()}});
   $('frictionSelect').addEventListener('change',e=>{solver.setFrictionModel(e.target.value);render()});
-  $('resetButton').addEventListener('click',reset);$('speedSelect').addEventListener('change',e=>speed=+e.target.value);$('gridSelect').addEventListener('change',e=>{const [nx,ny]=e.target.value.split('x').map(Number),geometry={...solver.geometry},reynolds=solver.reynolds,frictionModel=solver.frictionModel,mach=+$('machSlider').value,aoa=+$('aoaSlider').value;solver=new CFDSolver(nx,ny);solver.geometry=geometry;solver.reynolds=reynolds;solver.frictionModel=frictionModel;solver.reset(mach,aoa);lastStep=0;clearHistory();render()});
+  $('resetButton').addEventListener('click',reset);$('speedSelect').addEventListener('change',e=>speed=+e.target.value);$('gridSelect').addEventListener('change',e=>{const [nx,ny]=e.target.value.split('x').map(Number),geometry={...solver.geometry},reynolds=solver.reynolds,frictionModel=solver.frictionModel,mach=machField.value,aoa=aoaField.value;solver=new CFDSolver(nx,ny);solver.geometry=geometry;solver.reynolds=reynolds;solver.frictionModel=frictionModel;solver.reset(mach,aoa);lastStep=0;clearHistory();render()});
   $('playButton').addEventListener('click',()=>{running=!running;$('playIcon').textContent=running?'Ⅱ':'▶';$('playLabel').textContent=running?'一時停止':'計算を再開';$('statusText').textContent=running?'計算中':'一時停止';$('statusDot').classList.toggle('paused',!running)});
   document.querySelectorAll('[data-field]').forEach(b=>b.addEventListener('click',()=>{document.querySelectorAll('[data-field]').forEach(q=>q.classList.remove('active'));b.classList.add('active');field=b.dataset.field;drawColorbar();render()}));
   window.cfdApp={setGeometry:p=>{solver.setGeometry(p);clearHistory();render();},getGeometry:()=>({...solver.geometry}),sectionY:x=>solver.sectionY(x),getHistory:()=>history.slice(),getState:()=>({iteration:solver.iteration,time:solver.time,residual:solver.residual,mach:solver.mach,aoa:solver.aoa,reynolds:solver.reynolds,frictionModel:solver.frictionModel,running,backend:solver.backend})};
   window.addEventListener('resize',render);$('statusText').textContent='計算中';
-  $('reynoldsSlider').value=Math.log10(solver.reynolds).toFixed(1);$('reynoldsOutput').textContent=formatReynolds(solver.reynolds);$('frictionSelect').value=solver.frictionModel;
+  reynoldsField.set(solver.reynolds);$('frictionSelect').value=solver.frictionModel;
   drawColorbar();render();clearHistory();requestAnimationFrame(loop);
 })();
