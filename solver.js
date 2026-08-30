@@ -60,7 +60,9 @@
       }
       const perimeter=arc[dense];let cursor=1;
       for(let i=0;i<ni;i++){
-        const uArc=i/ni,target=perimeter*(uArc+.7*Math.sin(2*Math.PI*uArc)/(2*Math.PI));while(cursor<dense&&arc[cursor]<target)cursor++;const a=Math.max(0,cursor-1),b=Math.min(dense,cursor),z=(target-arc[a])/Math.max(arc[b]-arc[a],1e-12);
+        // Preserve the leading-edge concentration while adding a second minimum
+        // in spacing at the periodic trailing-edge/wake seam.
+        const uArc=i/ni,leadingBias=.25,edgeBias=.45,target=perimeter*(uArc+leadingBias*Math.sin(2*Math.PI*uArc)/(2*Math.PI)-edgeBias*Math.sin(4*Math.PI*uArc)/(4*Math.PI));while(cursor<dense&&arc[cursor]<target)cursor++;const a=Math.max(0,cursor-1),b=Math.min(dense,cursor),z=(target-arc[a])/Math.max(arc[b]-arc[a],1e-12);
         this.surfaceX[i]=px[a]+z*(px[b]-px[a]);this.surfaceTheta[i]=th[a]+z*(th[b]-th[a]);
         const sy=py[a]+z*(py[b]-py[a]),inner=this.sectionToWorld(this.surfaceX[i],sy),outerTheta=this.surfaceTheta[i],outer=this.sectionToWorld(.5+1.55*Math.cos(outerTheta),1.0*Math.sin(outerTheta));
         for(let j=0;j<=nj;j++){
