@@ -7,7 +7,14 @@
   'use strict';
   const G=1.4,PR=.72,clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
   const DEFAULT_GEOMETRY={thickness:.12,leadingEdge:1,camber:.022,camberPosition:.42,flattening:.010,lowerBias:.0035};
-  const WASM_CELL_FIELDS=['rho','mx','my','E','nr','nmx','nmy','nE','vorticity','machField','schlieren','cellX','cellY','cellArea','cellScale','uField','vField','pField','aField','xiNx','xiNy','xiLen','etaNx','etaNy','etaLen'];
+  const DEFAULT_REYNOLDS=5e4,REYNOLDS_RANGE={min:1e4,max:1e7};
+  // 摩擦抗力は平板近似の後処理項。圧力抗力へ加算するだけで流れ場そのものには影響しない。
+  const FRICTION_MODELS={
+    turbulent:{label:'平板乱流 0.074/Re^0.2',cf:re=>.074/Math.pow(re,.2)},
+    laminar:{label:'平板層流 1.328/√Re',cf:re=>1.328/Math.sqrt(re)},
+    none:{label:'摩擦なし（圧力抗力のみ）',cf:()=>0}
+  };
+  const WASM_CELL_FIELDS=['rho','mx','my','E','nr','nmx','nmy','nE','vorticity','machField','schlieren','cellX','cellY','cellArea','uField','vField','pField','aField','xiNx','xiNy','xiLen','etaNx','etaNy','etaLen'];
   const WASM_WALL_FIELDS=['wallNx','wallNy','wallLen','wallX','wallY'];
   let wasmModule=null,wasmFailed=false;
   function smoothstep(a,b,x){const t=clamp((x-a)/(b-a),0,1);return t*t*(3-2*t)}
@@ -28,7 +35,7 @@
     static async initialize(){
       if(wasmModule)return true;if(wasmFailed)return false;
       if(typeof global.createCFDCore!=='function'){wasmFailed=true;return false}
-      try{wasmModule=await global.createCFDCore({locateFile:path=>path==='cfd-core.wasm'?path+'?v=cpp-20260830-1':path});return true}catch(error){wasmFailed=true;console.warn('C++/WebAssembly solver unavailable; JavaScript fallback is active.',error);return false}
+      try{wasmModule=await global.createCFDCore({locateFile:path=>path==='cfd-core.wasm'?path+'?v=aero-20260830-2':path});return true}catch(error){wasmFailed=true;console.warn('C++/WebAssembly solver unavailable; JavaScript fallback is active.',error);return false}
     }
     constructor(nx=128,ny=64){
       this.nx=Math.max(96,Math.round(nx));this.ny=Math.max(48,Math.round(ny));this.n=this.nx*this.ny;
@@ -42,15 +49,16 @@
         for(const name of WASM_WALL_FIELDS)this[name]=new Float32Array(this.nx);
       }
       const nn=this.nx*(this.ny+1);this.nodeX=new Float32Array(nn);this.nodeY=new Float32Array(nn);this.surfaceX=new Float32Array(this.nx);this.surfaceTheta=new Float32Array(this.nx);
-      this.solid=new Uint8Array(this.n);this.reynolds=50000;this.geometry={...DEFAULT_GEOMETRY};this.mach=.9;this.aoa=2;this.gridType='body-fitted O-grid';this.reset(this.mach,this.aoa);
+      this.reynolds=DEFAULT_REYNOLDS;this.frictionModel='turbulent';this.geometry={...DEFAULT_GEOMETRY};this.mach=.9;this.aoa=2;this.reset(this.mach,this.aoa);
     }
     idx(i,j){i=(i%this.nx+this.nx)%this.nx;return i+j*this.nx}
     nodeIdx(i,j){i=(i%this.nx+this.nx)%this.nx;return i+j*this.nx}
     sectionY(x){return sectionY(x,this.geometry)}
     setGeometry(patch){this.geometry={...this.geometry,...patch};this.reset(this.mach,this.aoa)}
-    worldToSection(x,y){const a=-this.aoa*Math.PI/180,px=x-.25;return{x:.25+px*Math.cos(a)+y*Math.sin(a),y:-px*Math.sin(a)+y*Math.cos(a)}}
     sectionToWorld(x,y){const a=-this.aoa*Math.PI/180,px=x-.25;return{x:.25+px*Math.cos(a)-y*Math.sin(a),y:px*Math.sin(a)+y*Math.cos(a)}}
-    isInside(x,y){const q=this.worldToSection(x,y);if(q.x<0||q.x>1)return false;const s=this.sectionY(q.x);return q.y<=s.upper&&q.y>=s.lower}
+    setReynolds(value){const re=+value;if(!Number.isFinite(re))return;this.reynolds=clamp(re,REYNOLDS_RANGE.min,REYNOLDS_RANGE.max);this.reset(this.mach,this.aoa)}
+    setFrictionModel(key){if(!FRICTION_MODELS[key])return;this.frictionModel=key;this.sampleSurface()}
+    skinFriction(){return FRICTION_MODELS[this.frictionModel].cf(this.reynolds)}
 
     buildGrid(){
       const ni=this.nx,nj=this.ny,dense=Math.max(4096,ni*16),px=new Float64Array(dense+1),py=new Float64Array(dense+1),th=new Float64Array(dense+1),arc=new Float64Array(dense+1);
@@ -71,34 +79,26 @@
         }
       }
       let gx0=Infinity,gx1=-Infinity,gy0=Infinity,gy1=-Infinity;for(let k=0;k<this.nodeX.length;k++){gx0=Math.min(gx0,this.nodeX[k]);gx1=Math.max(gx1,this.nodeX[k]);gy0=Math.min(gy0,this.nodeY[k]);gy1=Math.max(gy1,this.nodeY[k])}const padx=.018*(gx1-gx0),pady=.025*(gy1-gy0);this.xmin=gx0-padx;this.xmax=gx1+padx;this.ymin=gy0-pady;this.ymax=gy1+pady;
-      this.minCellScale=Infinity;this.minCellArea=Infinity;
+      this.minCellScale=Infinity;
       for(let j=0;j<nj;j++)for(let i=0;i<ni;i++){
         const ip=(i+1)%ni,k=this.idx(i,j),a=this.nodeIdx(i,j),b=this.nodeIdx(ip,j),c=this.nodeIdx(ip,j+1),d=this.nodeIdx(i,j+1),xs=[this.nodeX[a],this.nodeX[b],this.nodeX[c],this.nodeX[d]],ys=[this.nodeY[a],this.nodeY[b],this.nodeY[c],this.nodeY[d]];
         this.cellX[k]=.25*(xs[0]+xs[1]+xs[2]+xs[3]);this.cellY[k]=.25*(ys[0]+ys[1]+ys[2]+ys[3]);
         let twice=0,per=0;for(let q=0;q<4;q++){const r=(q+1)%4;twice+=xs[q]*ys[r]-ys[q]*xs[r];per+=Math.hypot(xs[r]-xs[q],ys[r]-ys[q])}
-        const area=Math.max(Math.abs(twice)*.5,1e-8),scale=Math.max(2*area/Math.max(per,1e-8),1e-5);this.cellArea[k]=area;this.cellScale[k]=scale;this.minCellArea=Math.min(this.minCellArea,area);this.minCellScale=Math.min(this.minCellScale,scale);
+        const area=Math.max(Math.abs(twice)*.5,1e-8),scale=Math.max(2*area/Math.max(per,1e-8),1e-5);this.cellArea[k]=area;this.minCellScale=Math.min(this.minCellScale,scale);
       }
       for(let j=0;j<nj;j++)for(let i=0;i<ni;i++){const k=this.idx(i,j),L=this.idx(i-1,j),a=this.nodeIdx(i,j),b=this.nodeIdx(i,j+1),ex=this.nodeX[b]-this.nodeX[a],ey=this.nodeY[b]-this.nodeY[a],len=Math.max(Math.hypot(ex,ey),1e-10),dcx=this.cellX[k]-this.cellX[L],dcy=this.cellY[k]-this.cellY[L];let nx=-ey/len,ny=ex/len;if(nx*dcx+ny*dcy<0){nx=-nx;ny=-ny}this.xiNx[k]=nx;this.xiNy[k]=ny;this.xiLen[k]=len}
       for(let j=1;j<nj;j++)for(let i=0;i<ni;i++){const k=this.idx(i,j),B=k-ni,ip=(i+1)%ni,a=this.nodeIdx(i,j),b=this.nodeIdx(ip,j),ex=this.nodeX[b]-this.nodeX[a],ey=this.nodeY[b]-this.nodeY[a],len=Math.max(Math.hypot(ex,ey),1e-10),dcx=this.cellX[k]-this.cellX[B],dcy=this.cellY[k]-this.cellY[B];let nx=-ey/len,ny=ex/len;if(nx*dcx+ny*dcy<0){nx=-nx;ny=-ny}this.etaNx[k]=nx;this.etaNy[k]=ny;this.etaLen[k]=len}
       for(let i=0;i<ni;i++){const ip=(i+1)%ni,a=this.nodeIdx(i,0),b=this.nodeIdx(ip,0),ex=this.nodeX[b]-this.nodeX[a],ey=this.nodeY[b]-this.nodeY[a],len=Math.max(Math.hypot(ex,ey),1e-10),mx=.5*(this.nodeX[a]+this.nodeX[b]),my=.5*(this.nodeY[a]+this.nodeY[b]),k=this.idx(i,0);let nx=-ey/len,ny=ex/len;if(nx*(mx-this.cellX[k])+ny*(my-this.cellY[k])<0){nx=-nx;ny=-ny}this.wallNx[i]=nx;this.wallNy[i]=ny;this.wallLen[i]=len;this.wallX[i]=mx;this.wallY[i]=my}
-      this.surfaceCellsPerChord=Math.round(ni*.5);
     }
 
     reset(mach,aoa){
       this.mach=+mach;this.aoa=+aoa;this.buildGrid();const p=1/G,u=this.mach,e=p/(G-1)+.5*u*u;
       if(this.backend==='cpp-wasm')wasmModule._cfd_reset(this.mach,this.reynolds,this.cfl,this.minCellScale);else for(let k=0;k<this.n;k++){this.rho[k]=1;this.mx[k]=u;this.my[k]=0;this.E[k]=e}
-      this.time=0;this.iteration=0;this.residual=0;this.coeffs={cl:0,cd:0,cm:0,cp:NaN};
+      this.time=0;this.iteration=0;this.residual=0;this.coeffs={cl:0,cd:0,cdPressure:0,cdFriction:this.skinFriction(),cm:0,cp:NaN};
       this.diagnostics={maxSurfaceMach:this.mach,shockDetected:false,shockX:NaN,shockStrength:0,cpRoughnessRaw:0,cpRoughnessFiltered:0};
       this.cp={x:[],upper:[],lower:[],rawUpper:[],rawLower:[]};this.sampleSurface();
     }
     primitive(k){const r=Math.max(this.rho[k],.12),u=this.mx[k]/r,v=this.my[k]/r,p=Math.max((G-1)*(this.E[k]-.5*r*(u*u+v*v)),.035);return[r,u,v,p,Math.sqrt(G*p/r)]}
-    statePrimitive(U){const r=Math.max(U[0],.12),u=U[1]/r,v=U[2]/r,p=Math.max((G-1)*(U[3]-.5*r*(u*u+v*v)),.035);return[r,u,v,p,Math.sqrt(G*p/r)]}
-    state(k){return[this.rho[k],this.mx[k],this.my[k],this.E[k]]}
-    physicalFluxNormal(U,nx,ny){const q=this.statePrimitive(U),un=q[1]*nx+q[2]*ny;return[q[0]*un,U[1]*un+q[3]*nx,U[2]*un+q[3]*ny,(U[3]+q[3])*un]}
-    hllFluxStates(uL,uR,nx,ny){
-      const qL=this.statePrimitive(uL),qR=this.statePrimitive(uR),unL=qL[1]*nx+qL[2]*ny,unR=qR[1]*nx+qR[2]*ny,sL=Math.min(unL-qL[4],unR-qR[4]),sR=Math.max(unL+qL[4],unR+qR[4]),fL=this.physicalFluxNormal(uL,nx,ny),fR=this.physicalFluxNormal(uR,nx,ny);
-      if(sL>=0)return fL;if(sR<=0)return fR;const z=1/Math.max(sR-sL,1e-9),f=[0,0,0,0];for(let m=0;m<4;m++)f[m]=(sR*fL[m]-sL*fR[m]+sL*sR*(uR[m]-uL[m]))*z;return f;
-    }
     addInternalFace(L,R,nx,ny,len,dt){
       const rL=this.rho[L],rR=this.rho[R],uL=this.uField[L],vL=this.vField[L],uR=this.uField[R],vR=this.vField[R],pL=this.pField[L],pR=this.pField[R],eL=this.E[L],eR=this.E[R],unL=uL*nx+vL*ny,unR=uR*nx+vR*ny,sLw=Math.min(unL-this.aField[L],unR-this.aField[R]),sRw=Math.max(unL+this.aField[L],unR+this.aField[R]);
       let f0,f1,f2,f3;if(sLw>=0){f0=rL*unL;f1=this.mx[L]*unL+pL*nx;f2=this.my[L]*unL+pL*ny;f3=(eL+pL)*unL}else if(sRw<=0){f0=rR*unR;f1=this.mx[R]*unR+pR*nx;f2=this.my[R]*unR+pR*ny;f3=(eR+pR)*unR}else{const z=1/Math.max(sRw-sLw,1e-9),c=sLw*sRw;f0=(sRw*rL*unL-sLw*rR*unR+c*(rR-rL))*z;f1=(sRw*(this.mx[L]*unL+pL*nx)-sLw*(this.mx[R]*unR+pR*nx)+c*(this.mx[R]-this.mx[L]))*z;f2=(sRw*(this.my[L]*unL+pL*ny)-sLw*(this.my[R]*unR+pR*ny)+c*(this.my[R]-this.my[L]))*z;f3=(sRw*(eL+pL)*unL-sLw*(eR+pR)*unR+c*(eR-eL))*z}
@@ -130,13 +130,17 @@
     filterCp(values){let a=values.slice();for(let pass=0;pass<1;pass++){const b=a.slice();for(let i=1;i<a.length-1;i++){const curvature=Math.abs(a[i+1]-2*a[i]+a[i-1]);b[i]=curvature>.22?a[i]:.16*a[i-1]+.68*a[i]+.16*a[i+1]}a=b}return a}
     cpRoughness(a,shockIndex){let sum=0,n=0;for(let i=1;i<a.length-1;i++){if(Math.abs(i-shockIndex)<=3)continue;const d=a[i+1]-2*a[i]+a[i-1];sum+=d*d;n++}return Math.sqrt(sum/Math.max(n,1))}
     sampleSurface(){
+      // 壁面法線 g.n は流体セルから翼内向き。翼にはたらく圧力合力は +p·n·len で得る。
+      // モーメントは空力慣例に合わせて頭上げを正とするため、z軸まわり反時計回り成分の符号を反転する。
       const pi=1/G,qi=.5*this.mach*this.mach,upper=[],lower=[];let fx=0,fy=0,mo=0;
       for(let i=0;i<this.nx;i++){
         const ip=(i+1)%this.nx,g=this.wallGeometry(i),p=this.wallPressure(i),x=.5*(this.surfaceX[i]+this.surfaceX[ip]),theta=.5*(this.surfaceTheta[i]+(ip===0?2*Math.PI:this.surfaceTheta[ip])),q=this.primitive(this.idx(i,0)),M=Math.hypot(q[1],q[2])/q[4],cp=clamp((p-pi)/Math.max(qi,.045),-6,4),item={x,cp,p,M};
-        (theta<=Math.PI?upper:lower).push(item);const dfx=p*g.nx*g.len,dfy=p*g.ny*g.len;fx+=dfx;fy+=dfy;mo+=(g.mx-.25)*dfy-g.my*dfx;
+        (theta<=Math.PI?upper:lower).push(item);const dfx=p*g.nx*g.len,dfy=p*g.ny*g.len;fx+=dfx;fy+=dfy;mo+=g.my*dfx-(g.mx-.25)*dfy;
       }
-      upper.sort((a,b)=>a.x-b.x);lower.sort((a,b)=>a.x-b.x);const N=Math.min(128,Math.max(48,Math.round(this.nx/2))),xs=Array.from({length:N},(_,i)=>.004+.992*i/(N-1)),interpolate=(list,x,key)=>{let hi=1;while(hi<list.length-1&&list[hi].x<x)hi++;const a=list[Math.max(0,hi-1)],b=list[hi],z=clamp((x-a.x)/Math.max(b.x-a.x,1e-8),0,1);return a[key]+z*(b[key]-a[key])},surfaceUp=xs.map(x=>({x,cp:interpolate(upper,x,'cp'),p:interpolate(upper,x,'p'),M:interpolate(upper,x,'M')})),surfaceLo=xs.map(x=>({x,cp:interpolate(lower,x,'cp'),p:interpolate(lower,x,'p'),M:interpolate(lower,x,'M')})),rawUp=surfaceUp.map(d=>d.cp),rawLo=surfaceLo.map(d=>d.cp),up=this.filterCp(rawUp),lo=this.filterCp(rawLo),iq=1/Math.max(qi,.045),skin=.074/Math.pow(this.reynolds,.2),cl=clamp(fy*iq,-4,6),cd=clamp(Math.max(skin,fx*iq+skin),0,4),cm=clamp(mo*iq,-2,2),z=this.iteration<10?1:.22;
-      this.coeffs.cl=this.coeffs.cl*(1-z)+cl*z;this.coeffs.cd=this.coeffs.cd*(1-z)+cd*z;this.coeffs.cm=this.coeffs.cm*(1-z)+cm*z;this.coeffs.cp=Math.abs(this.coeffs.cl)>.05?.25+this.coeffs.cm/this.coeffs.cl:NaN;
+      upper.sort((a,b)=>a.x-b.x);lower.sort((a,b)=>a.x-b.x);const N=Math.min(128,Math.max(48,Math.round(this.nx/2))),xs=Array.from({length:N},(_,i)=>.004+.992*i/(N-1)),interpolate=(list,x,key)=>{let hi=1;while(hi<list.length-1&&list[hi].x<x)hi++;const a=list[Math.max(0,hi-1)],b=list[hi],z=clamp((x-a.x)/Math.max(b.x-a.x,1e-8),0,1);return a[key]+z*(b[key]-a[key])},surfaceUp=xs.map(x=>({x,cp:interpolate(upper,x,'cp'),p:interpolate(upper,x,'p'),M:interpolate(upper,x,'M')})),surfaceLo=xs.map(x=>({x,cp:interpolate(lower,x,'cp'),p:interpolate(lower,x,'p'),M:interpolate(lower,x,'M')})),rawUp=surfaceUp.map(d=>d.cp),rawLo=surfaceLo.map(d=>d.cp),up=this.filterCp(rawUp),lo=this.filterCp(rawLo),iq=1/Math.max(qi,.045),skin=this.skinFriction(),cl=clamp(fy*iq,-4,6),cdp=clamp(fx*iq,-1,4),cm=clamp(mo*iq,-2,2),z=this.iteration<10?1:.22;
+      this.coeffs.cl=this.coeffs.cl*(1-z)+cl*z;this.coeffs.cdPressure=this.coeffs.cdPressure*(1-z)+cdp*z;this.coeffs.cm=this.coeffs.cm*(1-z)+cm*z;
+      // 摩擦抗力は緩和せず即時反映し、圧力中心は空力慣例 x_cp/c = 0.25 − Cm/Cl で求める。
+      this.coeffs.cdFriction=skin;this.coeffs.cd=clamp(Math.max(this.coeffs.cdPressure,0)+skin,0,4);this.coeffs.cp=Math.abs(this.coeffs.cl)>.05?.25-this.coeffs.cm/this.coeffs.cl:NaN;
       let maxM=0,best={strength:0,x:NaN,index:-10};for(const d of surfaceUp)maxM=Math.max(maxM,d.M);for(let i=2;i<surfaceUp.length-2;i++){const dp=surfaceUp[i+2].p-surfaceUp[i-2].p,dm=surfaceUp[i-2].M-surfaceUp[i+2].M;if(surfaceUp[i-2].M>.98&&dp>best.strength&&dm>.06)best={strength:dp,x:surfaceUp[i].x,index:i}} 
       this.diagnostics={maxSurfaceMach:maxM,shockDetected:maxM>1&&best.strength>.009,shockX:best.x,shockStrength:best.strength,cpRoughnessRaw:this.cpRoughness(rawUp,best.index),cpRoughnessFiltered:this.cpRoughness(up,best.index)};
       this.cp={x:xs,upper:up,lower:lo,rawUpper:rawUp,rawLower:rawLo};
@@ -153,5 +157,5 @@
       for(let j=0;j<this.ny;j++)for(let i=0;i<this.nx;i++){const k=this.idx(i,j),gu=this.logicalGradient(u,k,i,j),gv=this.logicalGradient(v,k,i,j),gr=this.logicalGradient(r,k,i,j);this.vorticity[k]=gv[0]-gu[1];this.schlieren[k]=Math.log1p(6*Math.hypot(gr[0],gr[1]))}
     }
   }
-  global.CFDSolver=CFDSolver;global.CFDSectionY=sectionY;global.CFDDefaultGeometry={...DEFAULT_GEOMETRY};
+  global.CFDSolver=CFDSolver;global.CFDSectionY=sectionY;global.CFDDefaultGeometry={...DEFAULT_GEOMETRY};global.CFDFrictionModels=FRICTION_MODELS;global.CFDReynoldsRange={...REYNOLDS_RANGE};global.CFDDefaultReynolds=DEFAULT_REYNOLDS;
 })(window);

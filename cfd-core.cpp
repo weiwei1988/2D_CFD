@@ -22,7 +22,7 @@ float residual = 0.0f;
 std::vector<float> rho, mx, my, energy;
 std::vector<float> next_rho, next_mx, next_my, next_energy;
 std::vector<float> vorticity, mach_field, schlieren;
-std::vector<float> cell_x, cell_y, cell_area, cell_scale;
+std::vector<float> cell_x, cell_y, cell_area;
 std::vector<float> u_field, v_field, p_field, a_field;
 std::vector<float> xi_nx, xi_ny, xi_len, eta_nx, eta_ny, eta_len;
 std::vector<float> wall_nx, wall_ny, wall_len, wall_x, wall_y;
@@ -134,9 +134,9 @@ EMSCRIPTEN_KEEPALIVE int cfd_create(int requested_nx, int requested_ny) {
   cell_count = nx * ny;
   for (auto* array : {&rho, &mx, &my, &energy, &next_rho, &next_mx, &next_my,
                       &next_energy, &vorticity, &mach_field, &schlieren, &cell_x,
-                      &cell_y, &cell_area, &cell_scale, &u_field, &v_field,
-                      &p_field, &a_field, &xi_nx, &xi_ny, &xi_len, &eta_nx,
-                      &eta_ny, &eta_len}) {
+                      &cell_y, &cell_area, &u_field, &v_field, &p_field,
+                      &a_field, &xi_nx, &xi_ny, &xi_len, &eta_nx, &eta_ny,
+                      &eta_len}) {
     resize_cell_array(*array);
   }
   wall_nx.assign(nx, 0.0f);
@@ -323,7 +323,6 @@ POINTER_EXPORT(cfd_ptr_schlieren, schlieren)
 POINTER_EXPORT(cfd_ptr_cellX, cell_x)
 POINTER_EXPORT(cfd_ptr_cellY, cell_y)
 POINTER_EXPORT(cfd_ptr_cellArea, cell_area)
-POINTER_EXPORT(cfd_ptr_cellScale, cell_scale)
 POINTER_EXPORT(cfd_ptr_uField, u_field)
 POINTER_EXPORT(cfd_ptr_vField, v_field)
 POINTER_EXPORT(cfd_ptr_pField, p_field)

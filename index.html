@@ -9,6 +9,7 @@
   <link rel="stylesheet" href="analysis-views.css">
   <link rel="stylesheet" href="equal-columns.css">
   <link rel="stylesheet" href="airfoil-presets.css">
+  <link rel="stylesheet" href="flow-parameters.css">
 </head>
 <body>
   <main class="app-shell">
@@ -67,9 +68,12 @@
           <div class="flight-bar">
             <label class="control-block flight-control" for="aoaSlider"><span><b>迎角</b><output id="aoaOutput">2°</output></span><input id="aoaSlider" type="range" min="-10" max="50" step="1" value="2"><span class="range-labels"><i>−10°</i><i>50°</i></span></label>
             <label class="control-block flight-control" for="machSlider"><span><b>Mach 数</b><output id="machOutput">0.90</output></span><input id="machSlider" type="range" min="0.3" max="1.2" step="0.01" value="0.9"><span class="range-labels"><i>0.30</i><i>1.20</i></span></label>
+            <label class="control-block flight-control" for="reynoldsSlider"><span><b>Reynolds 数</b><output id="reynoldsOutput">5.0×10⁴</output></span><input id="reynoldsSlider" type="range" min="4" max="7" step="0.1" value="4.7"><span class="range-labels"><i>1.0×10⁴</i><i>1.0×10⁷</i></span></label>
+            <label class="control-block flight-control friction-control" for="frictionSelect"><span><b>摩擦抗力モデル</b></span><select id="frictionSelect"><option value="turbulent">平板乱流 0.074/Re^0.2</option><option value="laminar">平板層流 1.328/√Re</option><option value="none">摩擦なし（圧力抗力のみ）</option></select><span class="range-labels"><i>C<sub>D</sub> = 圧力 + 摩擦</i></span></label>
             <div class="flight-actions"><button id="resetButton" class="icon-button" type="button" title="流れ場を初期化">↻</button><button id="playButton" class="primary-button" type="button"><span id="playIcon">Ⅱ</span><span id="playLabel">一時停止</span></button><label class="speed-control">格子<select id="gridSelect"><option value="96x48">省電力 96×48</option><option value="128x64" selected>標準 128×64</option><option value="160x72">精細 160×72</option></select></label><label class="speed-control">速度<select id="speedSelect"><option value="1" selected>1×</option><option value="2">2×</option><option value="4">4×</option></select></label></div>
           </div>
-          <div class="metric-strip" aria-live="polite"><article><span>C<sub>L</sub></span><strong id="clValue">0.000</strong><small>揚力係数</small></article><article><span>C<sub>D</sub></span><strong id="cdValue">0.000</strong><small>抗力係数</small></article><article><span>C<sub>m,¼</sub></span><strong id="cmValue">0.000</strong><small>縦揺れモーメント</small></article><article><span>x<sub>cp</sub>/c</span><strong id="cpValue">—</strong><small>圧力中心</small></article></div>
+          <div class="metric-strip" aria-live="polite"><article><span>C<sub>L</sub></span><strong id="clValue">0.000</strong><small>揚力係数</small></article><article><span>C<sub>D</sub></span><strong id="cdValue">0.000</strong><small id="cdBreakdown">圧力 —
+摩擦 —</small></article><article><span>C<sub>m,¼</sub></span><strong id="cmValue">0.000</strong><small>縦揺れ · 頭上げ正</small></article><article><span>x<sub>cp</sub>/c</span><strong id="cpValue">—</strong><small>圧力中心</small></article></div>
           <div class="flow-card">
             <div class="flow-toolbar"><div><span id="fieldTitle">局所 Mach 数</span><small id="flowSubtitle">M∞ 0.90 · α 2°</small></div><div class="legend"><span id="legendMin">0.00</span><canvas id="colorbar" width="160" height="8"></canvas><span id="legendMax">1.45</span></div></div>
             <div class="canvas-wrap"><canvas id="flowCanvas" aria-label="翼面適合O格子上の翼周り流れ場"></canvas><div class="domain-tag inlet">FAR FIELD</div><div class="domain-tag outlet">FAR FIELD</div><div id="shockBadge" class="shock-badge hidden">SHOCK</div></div>
@@ -79,7 +83,7 @@
             <article class="chart-card"><div class="card-title"><div><span>SURFACE PRESSURE</span><small>Cp 分布 · 負圧上向き · 翼面外挿</small></div><div class="chart-legend"><i class="upper"></i>上面 <i class="lower"></i>下面 <span id="cpQuality" class="quality-label">局所平滑 −0%</span></div></div><canvas id="cpCanvas" aria-label="負圧側を上に表示した翼面Cp分布"></canvas></article>
             <article class="section-card"><div class="card-title"><div><span>CENTER OF PRESSURE</span><small>圧力合力の作用位置</small></div></div><canvas id="sectionCanvas" aria-label="翼型と圧力中心"></canvas><div class="section-readout"><span>LE</span><b id="cpReadout">Cl不足</b><span>TE</span></div></article>
           </div>
-          <div id="modelLine" class="model-line">翼面適合O格子 · 128 × 64 · C++/WebAssembly · HLL有限体積法 · Re = 50,000 · γ = 1.4</div>
+          <div id="modelLine" class="model-line">翼面適合O格子 · 128 × 64 · C++/WebAssembly · HLL有限体積法 · Re = 50,000 · 摩擦 平板乱流 0.074/Re^0.2 · γ = 1.4</div>
         </div>
       </section>
 
@@ -96,10 +100,10 @@
       </aside>
     </section>
   </main>
-  <script src="cfd-core.js?v=cpp-20260830-1"></script>
-  <script src="solver.js?v=trailing-grid-20260830-1"></script>
-  <script src="app.js?v=cpp-20260830-1"></script>
-  <script src="geometry-controls.js?v=cpp-20260830-1"></script>
-  <script src="analysis-views.js?v=cpp-20260830-1"></script>
+  <script src="cfd-core.js?v=aero-20260830-2"></script>
+  <script src="solver.js?v=aero-20260830-2"></script>
+  <script src="app.js?v=aero-20260830-2"></script>
+  <script src="geometry-controls.js?v=aero-20260830-2"></script>
+  <script src="analysis-views.js?v=aero-20260830-2"></script>
 </body>
 </html>
