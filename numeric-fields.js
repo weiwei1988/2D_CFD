@@ -15,26 +15,32 @@
   function decimalsOf(step){const text=String(step),dot=text.indexOf('.');return dot<0?0:text.length-dot-1}
 
   function bindNumericField(config){
-    const {slider,field,min,max,step,onChange}=config;
+    const {slider,field,min,max,step}=config;
+    const onChange=config.onChange||(()=>{}),onCommit=config.onCommit||(()=>{}),onInteraction=config.onInteraction||(()=>{});
     const fromSlider=config.fromSlider||(value=>value),toSlider=config.toSlider||(value=>value);
     const keyStep=config.keyStep||step,decimals=config.decimals??decimalsOf(step);
     const quantise=value=>+(Math.round(value/step)*step).toFixed(9);
     let value=clamp(quantise(fromSlider(+slider.value)),min,max);
     const paint=()=>{field.value=value.toFixed(decimals);slider.value=toSlider(value)};
-    const commit=(next,notify)=>{
+    const commit=(next,notify,meta={source:'program',commit:false})=>{
       const settled=clamp(quantise(next),min,max),changed=settled!==value;
       value=settled;paint();
-      if(notify&&changed)onChange(value);
+      if(notify&&changed)onChange(value,meta);
+      return changed;
     };
     const typed=()=>{const parsed=parseFloat(normalise(field.value));return Number.isFinite(parsed)?parsed:value};
-    slider.addEventListener('input',()=>commit(fromSlider(+slider.value),true));
-    field.addEventListener('change',()=>commit(typed(),true));
+    slider.addEventListener('pointerdown',()=>onInteraction(true));
+    slider.addEventListener('pointerup',()=>onInteraction(false));
+    slider.addEventListener('pointercancel',()=>{onInteraction(false);onCommit(value,{source:'slider',commit:true})});
+    slider.addEventListener('input',()=>commit(fromSlider(+slider.value),true,{source:'slider',commit:false}));
+    slider.addEventListener('change',()=>{onInteraction(false);onCommit(value,{source:'slider',commit:true})});
+    field.addEventListener('change',()=>{if(commit(typed(),true,{source:'field',commit:true}))onCommit(value,{source:'field',commit:true})});
     field.addEventListener('keydown',event=>{
       if(event.key==='Enter'){event.preventDefault();field.blur();return}
       const direction=event.key==='ArrowUp'?1:event.key==='ArrowDown'?-1:0;
       if(!direction)return;
       event.preventDefault();
-      commit(typed()+direction*keyStep*(event.shiftKey?10:1),true);
+      if(commit(typed()+direction*keyStep*(event.shiftKey?10:1),true,{source:'field',commit:true}))onCommit(value,{source:'field',commit:true});
     });
     paint();
     return{get value(){return value},set(next){commit(next,false)}};

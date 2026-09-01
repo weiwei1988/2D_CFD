@@ -3,4 +3,9 @@
 .friction-control select{display:block;width:100%;margin:6px 0 0;padding:5px 8px;border:1px solid var(--line);border-radius:4px;background:#101e2b;color:var(--text);font-size:10px;cursor:pointer}
 .friction-control .range-labels{justify-content:flex-start;color:#60798c}
 .metric-strip small#cdBreakdown{display:block;white-space:pre-line;line-height:1.45;font-family:"SF Mono",monospace;letter-spacing:-.01em}
+.flight-actions{flex-wrap:wrap}
+.regenerate-button{height:28px;padding:0 10px;border:1px solid rgba(255,138,71,.65);border-radius:4px;background:rgba(255,138,71,.10);color:#ffb080;font-size:9px;font-weight:750;cursor:pointer}
+.regenerate-button:not(:disabled):hover{border-color:var(--orange);background:rgba(255,138,71,.18)}
+.primary-button:disabled,.icon-button:disabled,.regenerate-button:disabled{cursor:not-allowed;opacity:.34}
+.status-dot.dirty{background:var(--orange);box-shadow:0 0 12px var(--orange)}
 @media(pointer:coarse){.friction-control select{min-height:44px;font-size:16px}}
