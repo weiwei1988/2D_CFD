@@ -27,7 +27,8 @@
     const yt=5*t*Math.max(shape,0),m=clamp(g.camber,0,.08),p=clamp(g.camberPosition,.2,.75);
     const yc=x<p?m/(p*p)*(2*p*x-x*x):m/((1-p)*(1-p))*((1-2*p)+2*p*x-x*x);
     const flat=clamp(g.flattening,0,.03)*smoothstep(.28,.82,x)*(1-x);
-    const lowerBias=clamp(g.lowerBias??.0035,0,.008)*(t/.12)*Math.sin(Math.PI*x)*smoothstep(.15,.65,x);
+    // 下面中後方だけを下げるアフトローディング量。入力値は翼弦長で無次元化した最大振幅。
+    const lowerBias=clamp(g.lowerBias??.0035,0,.008)*Math.sin(Math.PI*x)*smoothstep(.15,.65,x);
     return{upper:yc+yt-flat,lower:yc-yt-lowerBias};
   }
 
@@ -56,7 +57,7 @@
     sectionY(x){return sectionY(x,this.geometry)}
     setGeometry(patch){this.geometry={...this.geometry,...patch};this.reset(this.mach,this.aoa)}
     sectionToWorld(x,y){const a=-this.aoa*Math.PI/180,px=x-.25;return{x:.25+px*Math.cos(a)-y*Math.sin(a),y:px*Math.sin(a)+y*Math.cos(a)}}
-    setReynolds(value){const re=+value;if(!Number.isFinite(re))return;this.reynolds=clamp(re,REYNOLDS_RANGE.min,REYNOLDS_RANGE.max);this.reset(this.mach,this.aoa)}
+    setReynolds(value){const re=+value;if(!Number.isFinite(re))return;this.reynolds=clamp(re,REYNOLDS_RANGE.min,REYNOLDS_RANGE.max);this.reset(this.mach,this.aoa,false)}
     setFrictionModel(key){if(!FRICTION_MODELS[key])return;this.frictionModel=key;this.sampleSurface()}
     skinFriction(){return FRICTION_MODELS[this.frictionModel].cf(this.reynolds)}
 
@@ -91,8 +92,8 @@
       for(let i=0;i<ni;i++){const ip=(i+1)%ni,a=this.nodeIdx(i,0),b=this.nodeIdx(ip,0),ex=this.nodeX[b]-this.nodeX[a],ey=this.nodeY[b]-this.nodeY[a],len=Math.max(Math.hypot(ex,ey),1e-10),mx=.5*(this.nodeX[a]+this.nodeX[b]),my=.5*(this.nodeY[a]+this.nodeY[b]),k=this.idx(i,0);let nx=-ey/len,ny=ex/len;if(nx*(mx-this.cellX[k])+ny*(my-this.cellY[k])<0){nx=-nx;ny=-ny}this.wallNx[i]=nx;this.wallNy[i]=ny;this.wallLen[i]=len;this.wallX[i]=mx;this.wallY[i]=my}
     }
 
-    reset(mach,aoa){
-      this.mach=+mach;this.aoa=+aoa;this.buildGrid();const p=1/G,u=this.mach,e=p/(G-1)+.5*u*u;
+    reset(mach,aoa,rebuildGrid=true){
+      this.mach=+mach;this.aoa=+aoa;if(rebuildGrid)this.buildGrid();const p=1/G,u=this.mach,e=p/(G-1)+.5*u*u;
       if(this.backend==='cpp-wasm')wasmModule._cfd_reset(this.mach,this.reynolds,this.cfl,this.minCellScale);else for(let k=0;k<this.n;k++){this.rho[k]=1;this.mx[k]=u;this.my[k]=0;this.E[k]=e}
       this.time=0;this.iteration=0;this.residual=0;this.coeffs={cl:0,cd:0,cdPressure:0,cdFriction:this.skinFriction(),cm:0,cp:NaN};
       this.diagnostics={maxSurfaceMach:this.mach,shockDetected:false,shockX:NaN,shockStrength:0,cpRoughnessRaw:0,cpRoughnessFiltered:0};
@@ -153,7 +154,7 @@
     }
     updateDerivedFields(){
       if(this.backend==='cpp-wasm'){wasmModule._cfd_update_derived();return}
-      const u=new Float32Array(this.n),v=new Float32Array(this.n),r=this.rho;for(let k=0;k<this.n;k++){const q=this.primitive(k);u[k]=q[1];v[k]=q[2];this.machField[k]=Math.hypot(q[1],q[2])/q[4]}
+      const u=this.uField,v=this.vField,r=this.rho;for(let k=0;k<this.n;k++){const q=this.primitive(k);u[k]=q[1];v[k]=q[2];this.machField[k]=Math.hypot(q[1],q[2])/q[4]}
       for(let j=0;j<this.ny;j++)for(let i=0;i<this.nx;i++){const k=this.idx(i,j),gu=this.logicalGradient(u,k,i,j),gv=this.logicalGradient(v,k,i,j),gr=this.logicalGradient(r,k,i,j);this.vorticity[k]=gv[0]-gu[1];this.schlieren[k]=Math.log1p(6*Math.hypot(gr[0],gr[1]))}
     }
   }
