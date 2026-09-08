@@ -8,6 +8,9 @@
   const G=1.4,PR=.72,clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
   const DEFAULT_GEOMETRY={thickness:.12,leadingEdge:1,camber:.022,camberPosition:.42,flattening:.010,lowerBias:.0035};
   const DEFAULT_REYNOLDS=5e4,REYNOLDS_RANGE={min:1e4,max:1e7};
+  // O格子の外周。翼型座標系での楕円で、格子生成と領域内判定の唯一の定義。
+  const OUTER_ELLIPSE={cx:.5,rx:1.55,ry:1};
+  const outerSectionPoint=theta=>({x:OUTER_ELLIPSE.cx+OUTER_ELLIPSE.rx*Math.cos(theta),y:OUTER_ELLIPSE.ry*Math.sin(theta)});
   // 摩擦抗力は平板近似の後処理項。圧力抗力へ加算するだけで流れ場そのものには影響しない。
   const FRICTION_MODELS={
     turbulent:{label:'平板乱流 0.074/Re^0.2',cf:re=>.074/Math.pow(re,.2)},
@@ -57,6 +60,10 @@
     sectionY(x){return sectionY(x,this.geometry)}
     setGeometry(patch){this.geometry={...this.geometry,...patch};this.reset(this.mach,this.aoa)}
     sectionToWorld(x,y){const a=-this.aoa*Math.PI/180,px=x-.25;return{x:.25+px*Math.cos(a)-y*Math.sin(a),y:px*Math.sin(a)+y*Math.cos(a)}}
+    worldToSection(x,y){const a=-this.aoa*Math.PI/180,wx=x-.25;return{x:.25+wx*Math.cos(a)+y*Math.sin(a),y:-wx*Math.sin(a)+y*Math.cos(a)}}
+    // 計算領域の外周は buildGrid が張る楕円そのもの。判定側が定数を持たないよう solver から公開する。
+    insideFlowDomain(x,y){const p=this.worldToSection(x,y),ex=(p.x-OUTER_ELLIPSE.cx)/OUTER_ELLIPSE.rx,ey=p.y/OUTER_ELLIPSE.ry;return ex*ex+ey*ey<=1+1e-6}
+    isInside(x,y){const p=this.worldToSection(x,y);if(p.x<0||p.x>1)return false;const s=this.sectionY(p.x);return p.y>s.lower&&p.y<s.upper}
     setReynolds(value){const re=+value;if(!Number.isFinite(re))return;this.reynolds=clamp(re,REYNOLDS_RANGE.min,REYNOLDS_RANGE.max);this.reset(this.mach,this.aoa,false)}
     setFrictionModel(key){if(!FRICTION_MODELS[key])return;this.frictionModel=key;this.sampleSurface()}
     skinFriction(){return FRICTION_MODELS[this.frictionModel].cf(this.reynolds)}
@@ -73,7 +80,7 @@
         // in spacing at the periodic trailing-edge/wake seam.
         const uArc=i/ni,leadingBias=.25,edgeBias=.45,target=perimeter*(uArc+leadingBias*Math.sin(2*Math.PI*uArc)/(2*Math.PI)-edgeBias*Math.sin(4*Math.PI*uArc)/(4*Math.PI));while(cursor<dense&&arc[cursor]<target)cursor++;const a=Math.max(0,cursor-1),b=Math.min(dense,cursor),z=(target-arc[a])/Math.max(arc[b]-arc[a],1e-12);
         this.surfaceX[i]=px[a]+z*(px[b]-px[a]);this.surfaceTheta[i]=th[a]+z*(th[b]-th[a]);
-        const sy=py[a]+z*(py[b]-py[a]),inner=this.sectionToWorld(this.surfaceX[i],sy),outerTheta=this.surfaceTheta[i],outer=this.sectionToWorld(.5+1.55*Math.cos(outerTheta),1.0*Math.sin(outerTheta));
+        const sy=py[a]+z*(py[b]-py[a]),inner=this.sectionToWorld(this.surfaceX[i],sy),op=outerSectionPoint(this.surfaceTheta[i]),outer=this.sectionToWorld(op.x,op.y);
         for(let j=0;j<=nj;j++){
           const eta=j/nj,beta=.85,f=Math.expm1(beta*eta)/Math.expm1(beta),k=this.nodeIdx(i,j);
           this.nodeX[k]=inner.x+f*(outer.x-inner.x);this.nodeY[k]=inner.y+f*(outer.y-inner.y);
