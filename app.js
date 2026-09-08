@@ -73,9 +73,8 @@ window.cfdReady=(async function () {
     for(let pass=0;pass<3;pass++){const nu=su.slice(),nv=sv.slice(),nm=sm.slice(),nc=count.slice();for(let iy=1;iy<rows-1;iy++)for(let ix=1;ix<cols-1;ix++){const q=ix+iy*cols;if(count[q])continue;let u=0,v=0,m=0,c=0;for(const d of [-1,1,-cols,cols])if(count[q+d]){u+=su[q+d];v+=sv[q+d];m+=sm[q+d];c++}if(c){nu[q]=u/c;nv[q]=v/c;nm[q]=m/c;nc[q]=1}}su.set(nu);sv.set(nv);sm.set(nm);count.set(nc)}
     return(x,y)=>{const gx=(x-solver.xmin)/dx*(cols-1),gy=(y-solver.ymin)/dy*(rows-1);if(gx<0||gy<0||gx>=cols-1||gy>=rows-1)return null;const ix=Math.floor(gx),iy=Math.floor(gy),tx=gx-ix,ty=gy-iy;let u=0,v=0,m=0,w=0;for(const [ox,oy,z] of [[0,0,(1-tx)*(1-ty)],[1,0,tx*(1-ty)],[0,1,(1-tx)*ty],[1,1,tx*ty]]){const q=ix+ox+(iy+oy)*cols;if(!count[q])continue;u+=z*su[q];v+=z*sv[q];m+=z*sm[q];w+=z}return w>.15?[u/w,v/w,m/w]:null};
   }
-  function worldToSection(x,y){const a=-solver.aoa*Math.PI/180,c=Math.cos(a),sn=Math.sin(a),wx=x-.25;return{x:.25+wx*c+y*sn,y:-wx*sn+y*c}}
-  function insideFlowDomain(x,y){const p=worldToSection(x,y),ex=(p.x-.5)/1.55,ey=p.y;return ex*ex+ey*ey<=1+1e-6}
-  function insideAirfoil(x,y){const a=-solver.aoa*Math.PI/180,c=Math.cos(a),s=Math.sin(a),wx=x-.25,sx=.25+wx*c+y*s,sy=-wx*s+y*c;if(sx<0||sx>1)return false;const section=solver.sectionY(sx);return sy>section.lower&&sy<section.upper}
+  // 領域内・翼内部の判定は solver が持つ（外周楕円の定義を二重に持たないため）。
+  const insideFlowDomain=(x,y)=>solver.insideFlowDomain(x,y),insideAirfoil=(x,y)=>solver.isInside(x,y);
   function drawStreamlines(ctx,w,h,minMach,maxMach){
     ctx.save();let outerYMin=Infinity,outerYMax=-Infinity;ctx.beginPath();for(let i=0;i<=solver.nx;i++){const k=solver.nodeIdx(i%solver.nx,solver.ny),x=mapX(solver.nodeX[k],w),y=mapY(solver.nodeY[k],h);i?ctx.lineTo(x,y):ctx.moveTo(x,y);if(i<solver.nx){outerYMin=Math.min(outerYMin,solver.nodeY[k]);outerYMax=Math.max(outerYMax,solver.nodeY[k])}}ctx.closePath();ctx.clip();
     const upstreamX=y=>{let left=Infinity;for(let i=0;i<solver.nx;i++){const a=solver.nodeIdx(i,solver.ny),b=solver.nodeIdx(i+1,solver.ny),ya=solver.nodeY[a],yb=solver.nodeY[b];if(!((ya<=y&&y<yb)||(yb<=y&&y<ya)))continue;const t=(y-ya)/(yb-ya),x=solver.nodeX[a]+t*(solver.nodeX[b]-solver.nodeX[a]);left=Math.min(left,x)}return left};
@@ -140,27 +139,42 @@ window.cfdReady=(async function () {
     dot.classList.toggle('dirty',configurationDirty);dot.classList.toggle('paused',!running&&!configurationDirty);
   }
   function setParameterInteraction(active){parameterDragging=!!active;if(!parameterDragging){lastFrame=0;lastStep=performance.now()}}
-  function markConfigurationDirty(){configurationDirty=true;running=false;hasStarted=false;updateControlState()}
-  function stageGeometry(geometry){stagedGeometry={...geometry};markConfigurationDirty()}
-  let flightPending=false,reynoldsPending=false;
-  const markFlightPending=()=>{flightPending=true;markConfigurationDirty()},commitFlight=()=>{flightPending=false};
-  const markReynoldsPending=()=>{reynoldsPending=true;markConfigurationDirty()},commitReynolds=()=>{reynoldsPending=false};
+  // 保留中のUI値が solver へ適用済みの値と一致しているか。浮動小数の表現差を許容して比較する。
+  const nearly=(a,b)=>Math.abs(a-b)<=1e-9*Math.max(1,Math.abs(a),Math.abs(b));
+  function configurationApplied(){
+    const [nx,ny]=$('gridSelect').value.split('x').map(Number);
+    if(nx!==solver.nx||ny!==solver.ny)return false;
+    if(!nearly(machField.value,solver.mach)||!nearly(aoaField.value,solver.aoa))return false;
+    if(!nearly(reynoldsField.value,solver.reynolds))return false;
+    if($('frictionSelect').value!==solver.frictionModel)return false;
+    for(const key of Object.keys(CFDDefaultGeometry))
+      if(!nearly(stagedGeometry[key]??0,solver.geometry[key]??0))return false;
+    return true;
+  }
+  // 値を元へ戻せば「格子更新待ち」も解除される。状態が変わったときだけDOMへ書く。
+  function refreshConfigurationState(){
+    const dirty=!configurationApplied();
+    if(dirty===configurationDirty)return;
+    if(dirty)running=false;
+    configurationDirty=dirty;updateControlState();
+  }
+  function stageGeometry(geometry){stagedGeometry={...geometry};refreshConfigurationState()}
   // UI値は保留し、格子再生成ボタンを押すまでCFD状態へ適用しない。
-  const aoaField=CFDNumericField({slider:$('aoaSlider'),field:$('aoaInput'),min:-10,max:50,step:.5,onChange:markFlightPending,onCommit:commitFlight,onInteraction:setParameterInteraction});
-  const machField=CFDNumericField({slider:$('machSlider'),field:$('machInput'),min:.3,max:1.2,step:.01,onChange:markFlightPending,onCommit:commitFlight,onInteraction:setParameterInteraction});
-  const reynoldsField=CFDNumericField({slider:$('reynoldsSlider'),field:$('reynoldsInput'),min:1e4,max:1e7,step:1,keyStep:1000,fromSlider:reynoldsFromSlider,toSlider:re=>Math.log10(re),onChange:markReynoldsPending,onCommit:commitReynolds,onInteraction:setParameterInteraction});
+  const aoaField=CFDNumericField({slider:$('aoaSlider'),field:$('aoaInput'),min:-10,max:50,step:.5,onChange:refreshConfigurationState,onInteraction:setParameterInteraction});
+  const machField=CFDNumericField({slider:$('machSlider'),field:$('machInput'),min:.3,max:1.2,step:.01,onChange:refreshConfigurationState,onInteraction:setParameterInteraction});
+  const reynoldsField=CFDNumericField({slider:$('reynoldsSlider'),field:$('reynoldsInput'),min:1e4,max:1e7,step:1,keyStep:1000,fromSlider:reynoldsFromSlider,toSlider:re=>Math.log10(re),onChange:refreshConfigurationState,onInteraction:setParameterInteraction});
   function regenerateGrid(){
     const [nx,ny]=$('gridSelect').value.split('x').map(Number);
     if(nx!==solver.nx||ny!==solver.ny)solver=new CFDSolver(nx,ny);
     solver.geometry={...stagedGeometry};solver.reynolds=reynoldsField.value;solver.frictionModel=$('frictionSelect').value;solver.reset(machField.value,aoaField.value,true);
-    configurationDirty=false;running=false;hasStarted=false;flightPending=false;reynoldsPending=false;lastStep=0;lastFrame=0;clearHistory();render();window.dispatchEvent(new Event('cfdgeometrychange'));updateControlState();
+    configurationDirty=false;running=false;hasStarted=false;lastStep=0;lastFrame=0;clearHistory();render();window.dispatchEvent(new Event('cfdgeometrychange'));updateControlState();
   }
   function resetToWaiting(){
     if(configurationDirty)return;running=false;hasStarted=false;solver.reset(solver.mach,solver.aoa,false);lastStep=0;lastFrame=0;clearHistory();render();updateControlState();
   }
-  $('frictionSelect').addEventListener('change',markConfigurationDirty);
+  $('frictionSelect').addEventListener('change',refreshConfigurationState);
   $('regenerateButton').addEventListener('click',regenerateGrid);$('resetButton').addEventListener('click',resetToWaiting);
-  $('speedSelect').addEventListener('change',e=>speed=+e.target.value);$('gridSelect').addEventListener('change',markConfigurationDirty);
+  $('speedSelect').addEventListener('change',e=>speed=+e.target.value);$('gridSelect').addEventListener('change',refreshConfigurationState);
   $('playButton').addEventListener('click',()=>{if(configurationDirty)return;running=!running;hasStarted=true;lastStep=performance.now();updateControlState()});
   document.querySelectorAll('[data-field]').forEach(b=>b.addEventListener('click',()=>{document.querySelectorAll('[data-field]').forEach(q=>q.classList.remove('active'));b.classList.add('active');field=b.dataset.field;drawColorbar();render()}));
   window.cfdApp={stageGeometry,setParameterInteraction,getGeometry:()=>({...solver.geometry}),sectionY:x=>solver.sectionY(x),getHistory:()=>history.slice(),getState:()=>({iteration:solver.iteration,time:solver.time,residual:solver.residual,mach:solver.mach,aoa:solver.aoa,reynolds:solver.reynolds,frictionModel:solver.frictionModel,running,hasStarted,configurationDirty,backend:solver.backend})};
