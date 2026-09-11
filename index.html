@@ -20,6 +20,7 @@
       <div class="solver-state"><span id="statusDot" class="status-dot"></span><div><strong id="statusText">初期化中</strong><small id="iterationText">ITER 0 · t* 0.000</small></div></div>
     </header>
 
+    <p id="solverError" role="alert" hidden></p>
     <section class="unified-dashboard">
       <aside class="dashboard-panel geometry-window" aria-labelledby="geometryWindowTitle">
         <header class="window-header"><div><span class="window-kicker">SECTION DESIGN</span><h2 id="geometryWindowTitle">翼型ジオメトリー</h2></div><span class="live-tag">LIVE</span></header>
@@ -102,11 +103,11 @@
       </aside>
     </section>
   </main>
-  <script src="cfd-core.js?v=aero-20260830-2"></script>
-  <script src="solver.js?v=domain-api-20260909-1"></script>
+  <script src="solver.js?v=worker-20260912-1"></script>
   <script src="numeric-fields.js?v=manual-grid-20260901-1"></script>
-  <script src="app.js?v=dirty-state-20260909-1"></script>
-  <script src="geometry-controls.js?v=manual-grid-20260901-1"></script>
-  <script src="analysis-views.js?v=manual-grid-20260901-1"></script>
+  <script src="solver-client.js?v=background-20260912-1"></script>
+  <script src="app.js?v=background-20260912-1"></script>
+  <script src="geometry-controls.js?v=background-20260912-1"></script>
+  <script src="analysis-views.js?v=background-20260912-1"></script>
 </body>
 </html>

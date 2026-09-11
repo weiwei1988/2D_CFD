@@ -166,4 +166,4 @@
     }
   }
   global.CFDSolver=CFDSolver;global.CFDSectionY=sectionY;global.CFDDefaultGeometry={...DEFAULT_GEOMETRY};global.CFDFrictionModels=FRICTION_MODELS;global.CFDReynoldsRange={...REYNOLDS_RANGE};global.CFDDefaultReynolds=DEFAULT_REYNOLDS;
-})(window);
+})(globalThis);

@@ -27,8 +27,8 @@
   function markCustom(){presetSelect.value='custom';updatePresetNote('カスタム · 選択した形状をスライダーと数値入力で微調整')}
   function readGeometry(){const g={};for(const [name,spec] of Object.entries(CONTROLS))g[name]=fields[name].value*spec.scale;return g}
   function stage(next){const geometry=next||pendingGeometry||readGeometry();if(!window.cfdApp){if(window.cfdReady)window.cfdReady.then(()=>stage(geometry));return}window.cfdApp.stageGeometry(geometry)}
-  function drawPreview(){previewQueued=false;if(!pendingGeometry)return;window.dispatchEvent(new CustomEvent('cfdgeometrypreview',{detail:{...pendingGeometry}}));stage(pendingGeometry)}
-  function schedulePreview(){pendingGeometry=readGeometry();if(previewQueued)return;previewQueued=true;requestAnimationFrame(drawPreview)}
+  function drawPreview(){previewQueued=false;if(!pendingGeometry)return;window.dispatchEvent(new CustomEvent('cfdgeometrypreview',{detail:{...pendingGeometry}}))}
+  function schedulePreview(){pendingGeometry=readGeometry();stage(pendingGeometry);if(previewQueued)return;previewQueued=true;requestAnimationFrame(drawPreview)}
   function commit(){if(pendingGeometry)stage(pendingGeometry)}
   function selectPreset(key){const preset=presets[key];if(!preset)return;for(const [name,value] of Object.entries(preset.values))fields[name].set(value);updatePresetNote(preset.note);pendingGeometry=readGeometry();window.dispatchEvent(new CustomEvent('cfdgeometrypreview',{detail:{...pendingGeometry}}));stage(pendingGeometry)}
 
