@@ -1,10 +1,10 @@
 window.cfdReady=(async function () {
   'use strict';
-  await CFDSolver.initialize();
   const $ = id => document.getElementById(id);
   let solver = new CFDSolver(128, 64), stagedGeometry={...solver.geometry};
-  let running = false, hasStarted = false, configurationDirty = false, field = 'mach', speed = 1, lastFrame = 0, lastStep = 0, parameterDragging = false;
-  const history=[];let lastHistoryIteration=-10;
+  let running = false, hasStarted = false, configurationDirty = false, field = 'mach', speed = 1, lastFrame = 0, parameterDragging = false;
+  const history=[];
+  let client=null,workerBusy=true,workerError=false,snapshotPending=false,generation=0,needsRender=true;
 
   const flowCanvas=$('flowCanvas'), flowCtx=flowCanvas.getContext('2d');
   const cpCanvas=$('cpCanvas'), cpCtx=cpCanvas.getContext('2d');
@@ -92,7 +92,7 @@ window.cfdReady=(async function () {
   }
 
   function drawFlow(){
-    const size=fit(flowCanvas,flowCtx),sp=fieldSpec(),streamlineMode=field==='streamlines';solver.updateDerivedFields();flowCtx.clearRect(0,0,size.w,size.h);flowCtx.fillStyle='#07131f';flowCtx.fillRect(0,0,size.w,size.h);
+    const size=fit(flowCanvas,flowCtx),sp=fieldSpec(),streamlineMode=field==='streamlines';flowCtx.clearRect(0,0,size.w,size.h);flowCtx.fillStyle='#07131f';flowCtx.fillRect(0,0,size.w,size.h);
     if(streamlineMode){drawStreamlines(flowCtx,size.w,size.h,sp.min,sp.max)}else{const bins=56,paths=typeof Path2D==='function'?Array.from({length:bins},()=>new Path2D()):null;for(let j=0;j<solver.ny;j++)for(let i=0;i<solver.nx;i++){const k=solver.idx(i,j),q=solver.primitive(k);let v;if(field==='pressure')v=q[3];else if(field==='density')v=q[0];else if(field==='mach')v=solver.machField[k];else if(field==='schlieren')v=solver.schlieren[k];else v=Math.hypot(q[1],q[2]);const t=clamp((v-sp.min)/(sp.max-sp.min),0,1),bin=Math.min(bins-1,Math.floor(t*bins)),ip=(i+1)%solver.nx,ids=[solver.nodeIdx(i,j),solver.nodeIdx(ip,j),solver.nodeIdx(ip,j+1),solver.nodeIdx(i,j+1)],addPath=path=>{path.moveTo(mapX(solver.nodeX[ids[0]],size.w),mapY(solver.nodeY[ids[0]],size.h));for(let n=1;n<4;n++)path.lineTo(mapX(solver.nodeX[ids[n]],size.w),mapY(solver.nodeY[ids[n]],size.h));path.closePath()};if(paths)addPath(paths[bin]);else{flowCtx.beginPath();addPath(flowCtx);const rgb=field==='schlieren'?schlierenColor(t):turbo(t);flowCtx.fillStyle=`rgb(${rgb[0]|0},${rgb[1]|0},${rgb[2]|0})`;flowCtx.fill()}}if(paths)for(let b=0;b<bins;b++){const t=(b+.5)/bins,rgb=field==='schlieren'?schlierenColor(t):turbo(t);flowCtx.fillStyle=`rgb(${rgb[0]|0},${rgb[1]|0},${rgb[2]|0})`;flowCtx.fill(paths[b])}drawGridOverlay(flowCtx,size.w,size.h);drawSonicContour(flowCtx,size.w,size.h)}
     drawAirfoil(flowCtx,size.w,size.h);if(streamlineMode)$('shockBadge').classList.add('hidden');else updateShockBadge(size);$('overlayText').textContent=streamlineMode?'流線色: 局所 Mach 数':'白破線: M = 1';$('fieldTitle').textContent=sp.title;$('legendMin').textContent=sp.min.toFixed(sp.digits);$('legendMax').textContent=sp.max.toFixed(sp.digits);
   }
@@ -127,18 +127,61 @@ window.cfdReady=(async function () {
     const c=solver.coeffs,cp=Number.isFinite(c.cp)?c.cp:Math.abs(c.cl)>.05?.25-c.cm/c.cl:NaN,d=solver.diagnostics,quality=d.cpRoughnessRaw>0?Math.max(0,1-d.cpRoughnessFiltered/d.cpRoughnessRaw):0;if($("cpQuality"))$("cpQuality").textContent="局所平滑 −"+Math.round(quality*100)+"%";$('clValue').textContent=c.cl.toFixed(3);$('cdValue').textContent=c.cd.toFixed(3);if($('cdBreakdown'))$('cdBreakdown').textContent=`圧力 ${Math.max(c.cdPressure,0).toFixed(4)}\n摩擦 ${c.cdFriction.toFixed(4)}`;$('cmValue').textContent=c.cm.toFixed(3);$('cpValue').textContent=Number.isFinite(cp)?cp.toFixed(3):'—';$('cpReadout').textContent=Number.isFinite(cp)?`x/c = ${cp.toFixed(3)}${cp<0||cp>1?' · 翼弦外':''}`:'Cl不足';
     $('cflText').textContent=`CFL ${solver.cfl.toFixed(2)}`;if($('modelLine')){const engine=solver.backend==='cpp-wasm'?'C++/WebAssembly':'JavaScript fallback';$('modelLine').textContent=`翼面適合O格子 · ${solver.nx} × ${solver.ny} · ${engine} · HLL有限体積法 · Re = ${Math.round(solver.reynolds).toLocaleString()} · 摩擦 ${CFDFrictionModels[solver.frictionModel].label} · γ = 1.4`;}$('iterationText').textContent=`ITER ${solver.iteration.toLocaleString()} · t* ${solver.time.toFixed(3)}`;$('residualText').textContent=`ΔU ${solver.residual.toExponential(2)}`;$('flowSubtitle').textContent=`M∞ ${solver.mach.toFixed(2)} · α ${solver.aoa.toFixed(1)}° · Mlocal,max ${d.maxSurfaceMach.toFixed(2)}`;
   }
-  function recordHistory(force=false){if(!force&&solver.iteration-lastHistoryIteration<10)return;lastHistoryIteration=solver.iteration;const d=solver.diagnostics,c=solver.coeffs;history.push({iteration:solver.iteration,time:solver.time,residual:solver.residual,cl:c.cl,cd:c.cd,cm:c.cm,shockX:d.shockDetected?d.shockX:NaN,maxMach:d.maxSurfaceMach});if(history.length>2400)history.splice(0,history.length-2400);window.dispatchEvent(new Event('cfdhistory'));}
-  function clearHistory(){history.length=0;lastHistoryIteration=-10;recordHistory(true);}
+  function applySnapshot(data, token, replaceHistory=false) {
+    if (token !== generation) return;
+    Object.assign(solver, data.state);
+    if (replaceHistory) history.length = 0;
+    const after = history.length ? history[history.length-1].iteration : -1;
+    history.push(...data.history.filter(h => h.iteration > after));
+    if (history.length > 2400) history.splice(0, history.length-2400);
+    needsRender = true;
+    window.dispatchEvent(new Event('cfdhistory'));
+  }
+  function afterIteration(){return history.length ? history[history.length-1].iteration : -1}
+  function reportWorkerError(error) {
+    console.error('CFD worker:', error);
+    running = false; workerBusy = false; workerError = true;
+    client?.fail(error);
+    $('solverError').hidden = false;
+    $('solverError').textContent = '計算処理を停止しました。ページを再読み込みしてください。';
+    updateControlState();
+    window.dispatchEvent(new Event('cfdhistory'));
+  }
+  async function requestLatest() {
+    if (snapshotPending || workerBusy || workerError) return;
+    const token = generation;
+    snapshotPending = true;
+    try { applySnapshot(await client.request('snapshot', {afterIteration:afterIteration()}), token); }
+    catch (error) { reportWorkerError(error); }
+    finally { snapshotPending = false; }
+  }
+  function pauseCalculation() {
+    running = false;
+    const token = generation;
+    if (!workerBusy && !workerError) client.request('pause', {afterIteration:afterIteration()})
+      .then(data => applySnapshot(data, token)).catch(reportWorkerError);
+  }
   function render(){drawFlow();drawCp();drawSection();updateUI()}
-  function loop(t){const stepInterval=120/speed;if(!parameterDragging&&running&&t-lastStep>=stepInterval){solver.step();lastStep=t;recordHistory();}if(!parameterDragging&&running&&t-lastFrame>160){render();lastFrame=t}requestAnimationFrame(loop)}
+  // RAFは描画専用。Workerの時間積分と履歴記録は、描画要求の有無に依存しない。
+  function loop(t) {
+    if (!document.hidden && !parameterDragging && t-lastFrame>160) {
+      if (running) requestLatest();
+      if (needsRender) { render(); needsRender=false; }
+      lastFrame=t;
+    }
+    requestAnimationFrame(loop);
+  }
   function updateControlState(){
     const play=$('playButton'),regenerate=$('regenerateButton'),resetButton=$('resetButton'),dot=$('statusDot');
-    play.disabled=configurationDirty;regenerate.disabled=!configurationDirty;resetButton.disabled=configurationDirty;
+    play.disabled=configurationDirty||workerBusy||workerError;
+    regenerate.disabled=!configurationDirty||workerBusy||workerError;
+    resetButton.disabled=configurationDirty||workerBusy||workerError;
     $('playIcon').textContent=running?'Ⅱ':'▶';$('playLabel').textContent=running?'一時停止':hasStarted?'再開':'計算開始';
-    const status=configurationDirty?'格子更新待ち':running?'計算中':hasStarted?'一時停止':'待機中';$('statusText').textContent=status;if($('convStatus'))$('convStatus').textContent=status;
+    const status=workerError?'計算エラー':workerBusy?'格子準備中':configurationDirty?'格子更新待ち':running?'計算中':hasStarted?'一時停止':'待機中';
+    $('statusText').textContent=status;if($('convStatus'))$('convStatus').textContent=status;
     dot.classList.toggle('dirty',configurationDirty);dot.classList.toggle('paused',!running&&!configurationDirty);
   }
-  function setParameterInteraction(active){parameterDragging=!!active;if(!parameterDragging){lastFrame=0;lastStep=performance.now()}}
+  function setParameterInteraction(active){parameterDragging=!!active;if(!parameterDragging){lastFrame=0;needsRender=true}}
   // 保留中のUI値が solver へ適用済みの値と一致しているか。浮動小数の表現差を許容して比較する。
   const nearly=(a,b)=>Math.abs(a-b)<=1e-9*Math.max(1,Math.abs(a),Math.abs(b));
   function configurationApplied(){
@@ -151,34 +194,76 @@ window.cfdReady=(async function () {
       if(!nearly(stagedGeometry[key]??0,solver.geometry[key]??0))return false;
     return true;
   }
-  // 値を元へ戻せば「格子更新待ち」も解除される。状態が変わったときだけDOMへ書く。
+  // 元の値へ戻した場合は既存の格子を再利用できるが、自動では計算を再開しない。
   function refreshConfigurationState(){
     const dirty=!configurationApplied();
     if(dirty===configurationDirty)return;
-    if(dirty)running=false;
+    if(dirty)pauseCalculation();
     configurationDirty=dirty;updateControlState();
+    window.dispatchEvent(new Event('cfdhistory'));
   }
   function stageGeometry(geometry){stagedGeometry={...geometry};refreshConfigurationState()}
-  // UI値は保留し、格子再生成ボタンを押すまでCFD状態へ適用しない。
   const aoaField=CFDNumericField({slider:$('aoaSlider'),field:$('aoaInput'),min:-10,max:50,step:.5,onChange:refreshConfigurationState,onInteraction:setParameterInteraction});
   const machField=CFDNumericField({slider:$('machSlider'),field:$('machInput'),min:.3,max:1.2,step:.01,onChange:refreshConfigurationState,onInteraction:setParameterInteraction});
   const reynoldsField=CFDNumericField({slider:$('reynoldsSlider'),field:$('reynoldsInput'),min:1e4,max:1e7,step:1,keyStep:1000,fromSlider:reynoldsFromSlider,toSlider:re=>Math.log10(re),onChange:refreshConfigurationState,onInteraction:setParameterInteraction});
+
+  async function configureWorker(type, config) {
+    const token=++generation;
+    workerBusy=true;running=false;updateControlState();
+    try {
+      const data=await client.request(type, config ? {config} : {});
+      applySnapshot(data, token, true);
+      hasStarted=false;workerBusy=false;
+      configurationDirty=!configurationApplied();
+      lastFrame=0;
+      render();needsRender=false;
+      if(!configurationDirty)window.dispatchEvent(new Event('cfdgeometrychange'));
+      updateControlState();
+      window.dispatchEvent(new Event('cfdhistory'));
+    } catch(error) { reportWorkerError(error); }
+  }
   function regenerateGrid(){
+    if(workerBusy||workerError)return;
     const [nx,ny]=$('gridSelect').value.split('x').map(Number);
-    if(nx!==solver.nx||ny!==solver.ny)solver=new CFDSolver(nx,ny);
-    solver.geometry={...stagedGeometry};solver.reynolds=reynoldsField.value;solver.frictionModel=$('frictionSelect').value;solver.reset(machField.value,aoaField.value,true);
-    configurationDirty=false;running=false;hasStarted=false;lastStep=0;lastFrame=0;clearHistory();render();window.dispatchEvent(new Event('cfdgeometrychange'));updateControlState();
+    return configureWorker('configure',{nx,ny,geometry:{...stagedGeometry},mach:machField.value,
+      aoa:aoaField.value,reynolds:reynoldsField.value,frictionModel:$('frictionSelect').value});
   }
   function resetToWaiting(){
-    if(configurationDirty)return;running=false;hasStarted=false;solver.reset(solver.mach,solver.aoa,false);lastStep=0;lastFrame=0;clearHistory();render();updateControlState();
+    if(configurationDirty||workerBusy||workerError)return;
+    return configureWorker('reset');
   }
   $('frictionSelect').addEventListener('change',refreshConfigurationState);
   $('regenerateButton').addEventListener('click',regenerateGrid);$('resetButton').addEventListener('click',resetToWaiting);
-  $('speedSelect').addEventListener('change',e=>speed=+e.target.value);$('gridSelect').addEventListener('change',refreshConfigurationState);
-  $('playButton').addEventListener('click',()=>{if(configurationDirty)return;running=!running;hasStarted=true;lastStep=performance.now();updateControlState()});
-  document.querySelectorAll('[data-field]').forEach(b=>b.addEventListener('click',()=>{document.querySelectorAll('[data-field]').forEach(q=>q.classList.remove('active'));b.classList.add('active');field=b.dataset.field;drawColorbar();render()}));
-  window.cfdApp={stageGeometry,setParameterInteraction,getGeometry:()=>({...solver.geometry}),sectionY:x=>solver.sectionY(x),getHistory:()=>history.slice(),getState:()=>({iteration:solver.iteration,time:solver.time,residual:solver.residual,mach:solver.mach,aoa:solver.aoa,reynolds:solver.reynolds,frictionModel:solver.frictionModel,running,hasStarted,configurationDirty,backend:solver.backend})};
-  window.addEventListener('resize',render);
+  $('speedSelect').addEventListener('change',e=>{
+    speed=+e.target.value;
+    if(client&&!workerError)client.request('speed',{speed}).catch(reportWorkerError);
+  });
+  $('gridSelect').addEventListener('change',refreshConfigurationState);
+  $('playButton').addEventListener('click',()=>{
+    if(configurationDirty||workerBusy||workerError)return;
+    if(running)pauseCalculation();
+    else {running=true;hasStarted=true;client.request('run').catch(reportWorkerError);}
+    updateControlState();window.dispatchEvent(new Event('cfdhistory'));
+  });
+  document.querySelectorAll('[data-field]').forEach(b=>b.addEventListener('click',()=>{
+    document.querySelectorAll('[data-field]').forEach(q=>q.classList.remove('active'));
+    b.classList.add('active');field=b.dataset.field;drawColorbar();render();
+  }));
+  window.cfdApp={stageGeometry,setParameterInteraction,getGeometry:()=>({...solver.geometry}),
+    sectionY:x=>solver.sectionY(x),getHistory:()=>history.slice(),
+    getState:()=>({iteration:solver.iteration,time:solver.time,residual:solver.residual,
+      mach:solver.mach,aoa:solver.aoa,reynolds:solver.reynolds,frictionModel:solver.frictionModel,
+      running,hasStarted,configurationDirty,workerBusy,workerError,backend:solver.backend})};
+  window.addEventListener('resize',()=>{needsRender=true});
+  document.addEventListener('visibilitychange',()=>{
+    if(!document.hidden){parameterDragging=false;lastFrame=0;requestLatest();}
+  });
   reynoldsField.set(solver.reynolds);$('frictionSelect').value=solver.frictionModel;
-  drawColorbar();render();clearHistory();updateControlState();requestAnimationFrame(loop);
+  solver.updateDerivedFields();drawColorbar();render();updateControlState();
+  try {
+    client=new CFDWorkerClient(reportWorkerError);
+    await configureWorker('configure',{nx:solver.nx,ny:solver.ny,geometry:{...solver.geometry},
+      mach:solver.mach,aoa:solver.aoa,reynolds:solver.reynolds,frictionModel:solver.frictionModel});
+  } catch(error) { reportWorkerError(error); }
+  requestAnimationFrame(loop);
 })();
