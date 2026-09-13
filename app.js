@@ -1,7 +1,8 @@
 window.cfdReady=(async function () {
   'use strict';
   const $ = id => document.getElementById(id);
-  let solver = new CFDSolver(128, 64), stagedGeometry={...solver.geometry};
+  // 描画専用のシャドウ。格子と場は worker の最初のスナップショットで届く。
+  let solver = new CFDSolver(128, 64, {deferGrid:true}), stagedGeometry={...solver.geometry};
   let running = false, hasStarted = false, configurationDirty = false, field = 'mach', speed = 1, lastFrame = 0, parameterDragging = false;
   const history=[];
   let client=null,workerBusy=true,workerError=false,snapshotPending=false,generation=0,needsRender=true;
@@ -66,20 +67,76 @@ window.cfdReady=(async function () {
     ctx.restore();
   }
 
+  // 流線用の補間格子。構造（binの割り当てと空きbinを埋める順序）は格子だけで決まり、値はスナップショットごとに変わる。
+  // 無効化の契機は applySnapshot が進める appliedRevision（worker の revision）と fieldVersion に限る。
+  const SAMPLER_COLS=72,SAMPLER_ROWS=40;
+  let samplerCache=null,appliedRevision=null,fieldVersion=0;
+  function buildSampler(){
+    const cols=SAMPLER_COLS,rows=SAMPLER_ROWS,n=cols*rows,cells=solver.n;
+    // 格子の範囲は構築時点で固定し、ビニング・sample・詰め直しの全てがこの値だけを参照する。
+    const xmin=solver.xmin,ymin=solver.ymin,dx=solver.xmax-xmin,dy=solver.ymax-ymin;
+    const binOf=new Int32Array(cells),count=new Uint16Array(n);
+    for(let k=0;k<cells;k++){
+      const cx=solver.cellX[k],cy=solver.cellY[k];
+      // 非有限なセル中心は捨てる。Int32Array は NaN を 0 に丸めて bin 0 を汚染するため明示的に除外する。
+      if(!Number.isFinite(cx)||!Number.isFinite(cy)){binOf[k]=-1;continue}
+      const q=clamp(Math.floor((cx-xmin)/dx*cols),0,cols-1)+clamp(Math.floor((cy-ymin)/dy*rows),0,rows-1)*cols;
+      binOf[k]=q;count[q]++;
+    }
+    // 3パスの近傍補間を「どのbinを、どのbinの平均で埋めるか」の確定した並びへ畳む。
+    // 各パスの参照元はパス開始時点で埋まっているbinに限るため、順に適用すれば等価。
+    const has=new Uint8Array(n),plan=[];
+    for(let q=0;q<n;q++)has[q]=count[q]?1:0;
+    for(let pass=0;pass<3;pass++){
+      const added=[];
+      for(let iy=1;iy<rows-1;iy++)for(let ix=1;ix<cols-1;ix++){
+        const q=ix+iy*cols;if(has[q])continue;
+        const src=[];for(const d of[-1,1,-cols,cols])if(has[q+d])src.push(q+d);
+        if(src.length)added.push([q,src]);
+      }
+      for(const[q]of added)has[q]=1;
+      plan.push(...added);
+    }
+    const su=new Float32Array(n),sv=new Float32Array(n),sm=new Float32Array(n);
+    // bin i の値はビニングと同じくセル中心 (i+0.5)·dx/cols に置いて双線形補間する。
+    // 結果は呼び出し側の out へ書き、補間できない位置では false を返す（毎回の配列割り当てをしない）。
+    function sample(x,y,out){
+      const gx=(x-xmin)/dx*cols-.5,gy=(y-ymin)/dy*rows-.5;
+      if(!(gx>=0&&gy>=0&&gx<cols-1&&gy<rows-1))return false;
+      const ix=gx|0,iy=gy|0,tx=gx-ix,ty=gy-iy,q00=ix+iy*cols,q10=q00+1,q01=q00+cols,q11=q01+1;
+      const w00=has[q00]?(1-tx)*(1-ty):0,w10=has[q10]?tx*(1-ty):0,w01=has[q01]?(1-tx)*ty:0,w11=has[q11]?tx*ty:0,w=w00+w10+w01+w11;
+      if(!(w>.15))return false;
+      out[0]=(w00*su[q00]+w10*su[q10]+w01*su[q01]+w11*su[q11])/w;
+      out[1]=(w00*sv[q00]+w10*sv[q10]+w01*sv[q01]+w11*sv[q11])/w;
+      out[2]=(w00*sm[q00]+w10*sm[q10]+w01*sm[q01]+w11*sm[q11])/w;
+      return true;
+    }
+    return{cells,binOf,count,plan,su,sv,sm,sample,fieldVersion:-1};
+  }
   function velocitySampler(){
-    const cols=72,rows=40,n=cols*rows,su=new Float32Array(n),sv=new Float32Array(n),sm=new Float32Array(n),count=new Uint16Array(n),dx=solver.xmax-solver.xmin,dy=solver.ymax-solver.ymin;
-    for(let k=0;k<solver.n;k++){const ix=clamp(Math.floor((solver.cellX[k]-solver.xmin)/dx*cols),0,cols-1),iy=clamp(Math.floor((solver.cellY[k]-solver.ymin)/dy*rows),0,rows-1),q=ix+iy*cols;su[q]+=solver.uField[k];sv[q]+=solver.vField[k];sm[q]+=solver.machField[k];count[q]++}
-    for(let q=0;q<n;q++)if(count[q]){su[q]/=count[q];sv[q]/=count[q];sm[q]/=count[q]}
-    for(let pass=0;pass<3;pass++){const nu=su.slice(),nv=sv.slice(),nm=sm.slice(),nc=count.slice();for(let iy=1;iy<rows-1;iy++)for(let ix=1;ix<cols-1;ix++){const q=ix+iy*cols;if(count[q])continue;let u=0,v=0,m=0,c=0;for(const d of [-1,1,-cols,cols])if(count[q+d]){u+=su[q+d];v+=sv[q+d];m+=sm[q+d];c++}if(c){nu[q]=u/c;nv[q]=v/c;nm[q]=m/c;nc[q]=1}}su.set(nu);sv.set(nv);sm.set(nm);count.set(nc)}
-    return(x,y)=>{const gx=(x-solver.xmin)/dx*(cols-1),gy=(y-solver.ymin)/dy*(rows-1);if(gx<0||gy<0||gx>=cols-1||gy>=rows-1)return null;const ix=Math.floor(gx),iy=Math.floor(gy),tx=gx-ix,ty=gy-iy;let u=0,v=0,m=0,w=0;for(const [ox,oy,z] of [[0,0,(1-tx)*(1-ty)],[1,0,tx*(1-ty)],[0,1,(1-tx)*ty],[1,1,tx*ty]]){const q=ix+ox+(iy+oy)*cols;if(!count[q])continue;u+=z*su[q];v+=z*sv[q];m+=z*sm[q];w+=z}return w>.15?[u/w,v/w,m/w]:null};
+    let c=samplerCache;
+    if(!c||c.cells!==solver.n)c=samplerCache=buildSampler();
+    // 場が進んでいない再描画（リサイズや表示の切り替え）では詰め直しを省く。
+    if(c.fieldVersion!==fieldVersion){
+      const{cells,binOf,count,plan,su,sv,sm}=c,u=solver.uField,v=solver.vField,mach=solver.machField;
+      su.fill(0);sv.fill(0);sm.fill(0);
+      for(let k=0;k<cells;k++){const q=binOf[k];if(q<0)continue;su[q]+=u[k];sv[q]+=v[k];sm[q]+=mach[k]}
+      for(let q=0;q<count.length;q++)if(count[q]){su[q]/=count[q];sv[q]/=count[q];sm[q]/=count[q]}
+      for(const[q,src]of plan){
+        let au=0,av=0,am=0;for(const s of src){au+=su[s];av+=sv[s];am+=sm[s]}
+        const d=src.length;su[q]=au/d;sv[q]=av/d;sm[q]=am/d;
+      }
+      c.fieldVersion=fieldVersion;
+    }
+    return c.sample;
   }
   // 領域内・翼内部の判定は solver が持つ（外周楕円の定義を二重に持たないため）。
   const insideFlowDomain=(x,y)=>solver.insideFlowDomain(x,y),insideAirfoil=(x,y)=>solver.isInside(x,y);
   function drawStreamlines(ctx,w,h,minMach,maxMach){
     ctx.save();let outerYMin=Infinity,outerYMax=-Infinity;ctx.beginPath();for(let i=0;i<=solver.nx;i++){const k=solver.nodeIdx(i%solver.nx,solver.ny),x=mapX(solver.nodeX[k],w),y=mapY(solver.nodeY[k],h);i?ctx.lineTo(x,y):ctx.moveTo(x,y);if(i<solver.nx){outerYMin=Math.min(outerYMin,solver.nodeY[k]);outerYMax=Math.max(outerYMax,solver.nodeY[k])}}ctx.closePath();ctx.clip();
     const upstreamX=y=>{let left=Infinity;for(let i=0;i<solver.nx;i++){const a=solver.nodeIdx(i,solver.ny),b=solver.nodeIdx(i+1,solver.ny),ya=solver.nodeY[a],yb=solver.nodeY[b];if(!((ya<=y&&y<yb)||(yb<=y&&y<ya)))continue;const t=(y-ya)/(yb-ya),x=solver.nodeX[a]+t*(solver.nodeX[b]-solver.nodeX[a]);left=Math.min(left,x)}return left};
-    const sample=velocitySampler(),span=solver.xmax-solver.xmin,step=span/210,seeds=25,bins=36,paths=typeof Path2D==='function'?Array.from({length:bins},()=>new Path2D()):null,arrows=[],color=mach=>{const rgb=turbo(clamp((mach-minMach)/Math.max(maxMach-minMach,1e-6),0,1));return`rgb(${rgb[0]|0},${rgb[1]|0},${rgb[2]|0})`};ctx.save();ctx.lineWidth=1.15;ctx.lineCap='round';
-    for(let seed=0;seed<seeds;seed++){let y=outerYMin+(outerYMax-outerYMin)*(.12+.76*seed/(seeds-1)),x=upstreamX(y);if(!Number.isFinite(x))continue;x+=step*.75;if(!insideFlowDomain(x,y))continue;const points=[];for(let n=0;n<260;n++){const q=sample(x,y);if(!q)break;const speed=Math.hypot(q[0],q[1]);if(speed<1e-4)break;const mx=x+.5*step*q[0]/speed,my=y+.5*step*q[1]/speed,m=sample(mx,my)||q,ms=Math.max(Math.hypot(m[0],m[1]),1e-6),nx=x+step*m[0]/ms,ny=y+step*m[1]/ms;if(!insideFlowDomain(nx,ny)||insideAirfoil(nx,ny))break;points.push([mapX(nx,w),mapY(ny,h),m[2]]);x=nx;y=ny}if(points.length<2)continue;for(let i=1;i<points.length;i++){const a=points[i-1],b=points[i],mach=.5*(a[2]+b[2]),bin=Math.min(bins-1,Math.floor(clamp((mach-minMach)/Math.max(maxMach-minMach,1e-6),0,1)*bins));if(paths){paths[bin].moveTo(a[0],a[1]);paths[bin].lineTo(b[0],b[1])}else{ctx.beginPath();ctx.moveTo(a[0],a[1]);ctx.lineTo(b[0],b[1]);ctx.strokeStyle=color(mach);ctx.stroke()}}if(seed%2===0){const i=Math.floor(points.length*.55),a=points[Math.max(0,i-1)],b=points[i];arrows.push({x:b[0],y:b[1],a:Math.atan2(b[1]-a[1],b[0]-a[0]),mach:b[2]})}}
+    const sample=velocitySampler(),qa=[0,0,0],qb=[0,0,0],span=solver.xmax-solver.xmin,step=span/210,seeds=25,bins=36,paths=typeof Path2D==='function'?Array.from({length:bins},()=>new Path2D()):null,arrows=[],color=mach=>{const rgb=turbo(clamp((mach-minMach)/Math.max(maxMach-minMach,1e-6),0,1));return`rgb(${rgb[0]|0},${rgb[1]|0},${rgb[2]|0})`};ctx.save();ctx.lineWidth=1.15;ctx.lineCap='round';
+    for(let seed=0;seed<seeds;seed++){let y=outerYMin+(outerYMax-outerYMin)*(.12+.76*seed/(seeds-1)),x=upstreamX(y);if(!Number.isFinite(x))continue;x+=step*.75;if(!insideFlowDomain(x,y))continue;const points=[];for(let n=0;n<260;n++){if(!sample(x,y,qa))break;const speed=Math.hypot(qa[0],qa[1]);if(speed<1e-4)break;const mx=x+.5*step*qa[0]/speed,my=y+.5*step*qa[1]/speed,m=sample(mx,my,qb)?qb:qa,ms=Math.max(Math.hypot(m[0],m[1]),1e-6),nx=x+step*m[0]/ms,ny=y+step*m[1]/ms;if(!insideFlowDomain(nx,ny)||insideAirfoil(nx,ny))break;points.push([mapX(nx,w),mapY(ny,h),m[2]]);x=nx;y=ny}if(points.length<2)continue;for(let i=1;i<points.length;i++){const a=points[i-1],b=points[i],mach=.5*(a[2]+b[2]),bin=Math.min(bins-1,Math.floor(clamp((mach-minMach)/Math.max(maxMach-minMach,1e-6),0,1)*bins));if(paths){paths[bin].moveTo(a[0],a[1]);paths[bin].lineTo(b[0],b[1])}else{ctx.beginPath();ctx.moveTo(a[0],a[1]);ctx.lineTo(b[0],b[1]);ctx.strokeStyle=color(mach);ctx.stroke()}}if(seed%2===0){const i=Math.floor(points.length*.55),a=points[Math.max(0,i-1)],b=points[i];arrows.push({x:b[0],y:b[1],a:Math.atan2(b[1]-a[1],b[0]-a[0]),mach:b[2]})}}
     if(paths)for(let bin=0;bin<bins;bin++){const mach=minMach+(bin+.5)/bins*(maxMach-minMach);ctx.strokeStyle=color(mach);ctx.stroke(paths[bin])}for(const arrow of arrows){ctx.save();ctx.translate(arrow.x,arrow.y);ctx.rotate(arrow.a);ctx.fillStyle=color(arrow.mach);ctx.beginPath();ctx.moveTo(4.5,0);ctx.lineTo(-3.2,-2.6);ctx.lineTo(-3.2,2.6);ctx.closePath();ctx.fill();ctx.restore()}ctx.restore();ctx.restore();
   }
 
@@ -93,7 +150,8 @@ window.cfdReady=(async function () {
 
   function drawFlow(){
     const size=fit(flowCanvas,flowCtx),sp=fieldSpec(),streamlineMode=field==='streamlines';flowCtx.clearRect(0,0,size.w,size.h);flowCtx.fillStyle='#07131f';flowCtx.fillRect(0,0,size.w,size.h);
-    if(streamlineMode){drawStreamlines(flowCtx,size.w,size.h,sp.min,sp.max)}else{const bins=56,paths=typeof Path2D==='function'?Array.from({length:bins},()=>new Path2D()):null;for(let j=0;j<solver.ny;j++)for(let i=0;i<solver.nx;i++){const k=solver.idx(i,j),q=solver.primitive(k);let v;if(field==='pressure')v=q[3];else if(field==='density')v=q[0];else if(field==='mach')v=solver.machField[k];else if(field==='schlieren')v=solver.schlieren[k];else v=Math.hypot(q[1],q[2]);const t=clamp((v-sp.min)/(sp.max-sp.min),0,1),bin=Math.min(bins-1,Math.floor(t*bins)),ip=(i+1)%solver.nx,ids=[solver.nodeIdx(i,j),solver.nodeIdx(ip,j),solver.nodeIdx(ip,j+1),solver.nodeIdx(i,j+1)],addPath=path=>{path.moveTo(mapX(solver.nodeX[ids[0]],size.w),mapY(solver.nodeY[ids[0]],size.h));for(let n=1;n<4;n++)path.lineTo(mapX(solver.nodeX[ids[n]],size.w),mapY(solver.nodeY[ids[n]],size.h));path.closePath()};if(paths)addPath(paths[bin]);else{flowCtx.beginPath();addPath(flowCtx);const rgb=field==='schlieren'?schlierenColor(t):turbo(t);flowCtx.fillStyle=`rgb(${rgb[0]|0},${rgb[1]|0},${rgb[2]|0})`;flowCtx.fill()}}if(paths)for(let b=0;b<bins;b++){const t=(b+.5)/bins,rgb=field==='schlieren'?schlierenColor(t):turbo(t);flowCtx.fillStyle=`rgb(${rgb[0]|0},${rgb[1]|0},${rgb[2]|0})`;flowCtx.fill(paths[b])}drawGridOverlay(flowCtx,size.w,size.h);drawSonicContour(flowCtx,size.w,size.h)}
+    // 格子は worker の最初の configure スナップショットで届く。それまでは翼型の輪郭だけを描く。
+    if(solver.gridReady){if(streamlineMode){drawStreamlines(flowCtx,size.w,size.h,sp.min,sp.max)}else{const bins=56,paths=typeof Path2D==='function'?Array.from({length:bins},()=>new Path2D()):null;for(let j=0;j<solver.ny;j++)for(let i=0;i<solver.nx;i++){const k=solver.idx(i,j),q=solver.primitive(k);let v;if(field==='pressure')v=q[3];else if(field==='density')v=q[0];else if(field==='mach')v=solver.machField[k];else if(field==='schlieren')v=solver.schlieren[k];else v=Math.hypot(q[1],q[2]);const t=clamp((v-sp.min)/(sp.max-sp.min),0,1),bin=Math.min(bins-1,Math.floor(t*bins)),ip=(i+1)%solver.nx,ids=[solver.nodeIdx(i,j),solver.nodeIdx(ip,j),solver.nodeIdx(ip,j+1),solver.nodeIdx(i,j+1)],addPath=path=>{path.moveTo(mapX(solver.nodeX[ids[0]],size.w),mapY(solver.nodeY[ids[0]],size.h));for(let n=1;n<4;n++)path.lineTo(mapX(solver.nodeX[ids[n]],size.w),mapY(solver.nodeY[ids[n]],size.h));path.closePath()};if(paths)addPath(paths[bin]);else{flowCtx.beginPath();addPath(flowCtx);const rgb=field==='schlieren'?schlierenColor(t):turbo(t);flowCtx.fillStyle=`rgb(${rgb[0]|0},${rgb[1]|0},${rgb[2]|0})`;flowCtx.fill()}}if(paths)for(let b=0;b<bins;b++){const t=(b+.5)/bins,rgb=field==='schlieren'?schlierenColor(t):turbo(t);flowCtx.fillStyle=`rgb(${rgb[0]|0},${rgb[1]|0},${rgb[2]|0})`;flowCtx.fill(paths[b])}drawGridOverlay(flowCtx,size.w,size.h);drawSonicContour(flowCtx,size.w,size.h)}}
     drawAirfoil(flowCtx,size.w,size.h);if(streamlineMode)$('shockBadge').classList.add('hidden');else updateShockBadge(size);$('overlayText').textContent=streamlineMode?'流線色: 局所 Mach 数':'白破線: M = 1';$('fieldTitle').textContent=sp.title;$('legendMin').textContent=sp.min.toFixed(sp.digits);$('legendMax').textContent=sp.max.toFixed(sp.digits);
   }
 
@@ -129,7 +187,10 @@ window.cfdReady=(async function () {
   }
   function applySnapshot(data, token, replaceHistory=false) {
     if (token !== generation) return;
+    // 格子由来のキャッシュは worker の revision（configure / reset で進む）でだけ無効化する。
+    if (data.revision !== appliedRevision) { appliedRevision = data.revision; samplerCache = null; }
     Object.assign(solver, data.state);
+    fieldVersion++;
     if (replaceHistory) history.length = 0;
     const after = history.length ? history[history.length-1].iteration : -1;
     history.push(...data.history.filter(h => h.iteration > after));
@@ -259,7 +320,7 @@ window.cfdReady=(async function () {
     if(!document.hidden){parameterDragging=false;lastFrame=0;requestLatest();}
   });
   reynoldsField.set(solver.reynolds);$('frictionSelect').value=solver.frictionModel;
-  solver.updateDerivedFields();drawColorbar();render();updateControlState();
+  drawColorbar();render();updateControlState();
   try {
     client=new CFDWorkerClient(reportWorkerError);
     await configureWorker('configure',{nx:solver.nx,ny:solver.ny,geometry:{...solver.geometry},

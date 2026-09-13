@@ -75,7 +75,31 @@ async function check(fallback) {
     assert.equal(grid.state.rho.length,128*64);
     assert.equal(grid.state.mach,.7);
     assert.equal(stopped.state.iteration,0);
-    console.log((fallback?'JS':'Wasm')+': independent stepping, pause, reset, history and ordered reconfiguration PASS ('+result.state.iteration+' iterations)');
+    // 格子寸法を据え置いた configure は再利用ブランチを通る。新規生成した solver と一致すること。
+    const sameGrid={...changed,mach:.72,aoa:3,geometry:{...changed.geometry,camber:.03}};
+    const reused=await request('configure',{config:sameGrid});
+    const fresh=new CFDSolver(128,64,sameGrid);
+    assert.deepEqual(reused.state.nodeX,fresh.nodeX,'Reuse branch grid differs from a freshly constructed solver');
+    assert.deepEqual(reused.state.geometry,fresh.geometry);
+    for(const key of ['mach','aoa','reynolds','frictionModel'])assert.equal(reused.state[key],fresh[key],key);
+    if (!fallback) {
+      assert.deepEqual(reused.state.rho,fresh.rho,'Reuse branch flow field differs from a fresh solver');
+      assert.deepEqual(reused.state.coeffs,fresh.coeffs);
+    }
+    // 欠けた項目は両ブランチとも同じ既定値で補われ、Workerを停止させない。
+    const partial={nx:128,ny:64,geometry:{thickness:.14}};
+    const viaReuse=await request('configure',{config:partial});
+    const viaFresh=await request('configure',{config:{...partial,nx:96,ny:48}});
+    const expectedGeometry={...CFDDefaultGeometry,thickness:.14};
+    assert.deepEqual(viaReuse.state.geometry,expectedGeometry,'Reuse branch must fill missing geometry');
+    assert.deepEqual(viaFresh.state.geometry,expectedGeometry,'Fresh branch must fill missing geometry');
+    for(const snap of [viaReuse,viaFresh]){
+      assert.equal(snap.state.frictionModel,'turbulent');
+      assert.equal(snap.state.reynolds,50000);
+      assert.equal(snap.state.gridReady,true);
+      assert.ok(Number.isFinite(snap.state.coeffs.cl),'Partial configure produced a non-finite lift coefficient');
+    }
+    console.log((fallback?'JS':'Wasm')+': independent stepping, pause, reset, history, ordered reconfiguration and configure branches PASS ('+result.state.iteration+' iterations)');
   } finally { await worker.terminate(); }
 }
 (async()=>{
