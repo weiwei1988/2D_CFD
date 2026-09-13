@@ -2,7 +2,7 @@
   'use strict';
   class CFDWorkerClient {
     constructor(onError) {
-      this.worker = new Worker('solver-worker.js?v=background-20260912-1');
+      this.worker = new Worker('solver-worker.js?v=hotpath-20260914-1');
       this.pending = new Map();
       this.nextId = 0;
       this.failure = null;

@@ -41,9 +41,13 @@
       if(typeof global.createCFDCore!=='function'){wasmFailed=true;return false}
       try{wasmModule=await global.createCFDCore({locateFile:path=>path==='cfd-core.wasm'?path+'?v=aero-20260830-2':path});return true}catch(error){wasmFailed=true;console.warn('C++/WebAssembly solver unavailable; JavaScript fallback is active.',error);return false}
     }
-    constructor(nx=128,ny=64){
+    // config を渡すと初期化時点の条件で格子を1回だけ生成する。欠けた項目は既定値で補う。
+    // deferGrid は描画専用のシャドウ向けで、格子も場の配列も作らず最初のスナップショットで埋める。
+    constructor(nx=128,ny=64,config=null){
       this.nx=Math.max(96,Math.round(nx));this.ny=Math.max(48,Math.round(ny));this.n=this.nx*this.ny;
       this.xmin=-1.05;this.xmax=2.05;this.ymin=-.82;this.ymax=.82;this.cfl=.38;this.backend=wasmModule?'cpp-wasm':'javascript';
+      this.applyConfig(config);
+      if(config?.deferGrid){this.gridReady=false;this.resetDiagnostics();return}
       if(wasmModule){
         if(!wasmModule._cfd_create(this.nx,this.ny))throw new Error('C++ solver allocation failed');
         for(const name of WASM_CELL_FIELDS){const pointer=wasmModule['_cfd_ptr_'+name]();this[name]=new Float32Array(wasmModule.HEAPF32.buffer,pointer,this.n)}
@@ -53,7 +57,15 @@
         for(const name of WASM_WALL_FIELDS)this[name]=new Float32Array(this.nx);
       }
       const nn=this.nx*(this.ny+1);this.nodeX=new Float32Array(nn);this.nodeY=new Float32Array(nn);this.surfaceX=new Float32Array(this.nx);this.surfaceTheta=new Float32Array(this.nx);
-      this.reynolds=DEFAULT_REYNOLDS;this.frictionModel='turbulent';this.geometry={...DEFAULT_GEOMETRY};this.mach=.9;this.aoa=2;this.reset(this.mach,this.aoa);
+      this.gridReady=true;this.reset(this.mach,this.aoa);
+    }
+    // configure 系の唯一の入口。欠落・非有限の項目は既定値で補い、新規生成と再設定で同じ solver にする。
+    applyConfig(config){
+      const finite=(v,fallback)=>Number.isFinite(v)?v:fallback,geometry={...DEFAULT_GEOMETRY};
+      this.reynolds=Number.isFinite(config?.reynolds)?clamp(config.reynolds,REYNOLDS_RANGE.min,REYNOLDS_RANGE.max):DEFAULT_REYNOLDS;
+      this.frictionModel=Object.hasOwn(FRICTION_MODELS,config?.frictionModel??'')?config.frictionModel:'turbulent';
+      for(const key of Object.keys(DEFAULT_GEOMETRY))geometry[key]=finite(config?.geometry?.[key],geometry[key]);
+      this.geometry=geometry;this.mach=finite(config?.mach,.9);this.aoa=finite(config?.aoa,2);
     }
     idx(i,j){i=(i%this.nx+this.nx)%this.nx;return i+j*this.nx}
     nodeIdx(i,j){i=(i%this.nx+this.nx)%this.nx;return i+j*this.nx}
@@ -102,9 +114,12 @@
     reset(mach,aoa,rebuildGrid=true){
       this.mach=+mach;this.aoa=+aoa;if(rebuildGrid)this.buildGrid();const p=1/G,u=this.mach,e=p/(G-1)+.5*u*u;
       if(this.backend==='cpp-wasm')wasmModule._cfd_reset(this.mach,this.reynolds,this.cfl,this.minCellScale);else for(let k=0;k<this.n;k++){this.rho[k]=1;this.mx[k]=u;this.my[k]=0;this.E[k]=e}
+      this.resetDiagnostics();this.sampleSurface();
+    }
+    resetDiagnostics(){
       this.time=0;this.iteration=0;this.residual=0;this.coeffs={cl:0,cd:0,cdPressure:0,cdFriction:this.skinFriction(),cm:0,cp:NaN};
       this.diagnostics={maxSurfaceMach:this.mach,shockDetected:false,shockX:NaN,shockStrength:0,cpRoughnessRaw:0,cpRoughnessFiltered:0};
-      this.cp={x:[],upper:[],lower:[],rawUpper:[],rawLower:[]};this.sampleSurface();
+      this.cp={x:[],upper:[],lower:[],rawUpper:[],rawLower:[]};
     }
     primitive(k){const r=Math.max(this.rho[k],.12),u=this.mx[k]/r,v=this.my[k]/r,p=Math.max((G-1)*(this.E[k]-.5*r*(u*u+v*v)),.035);return[r,u,v,p,Math.sqrt(G*p/r)]}
     addInternalFace(L,R,nx,ny,len,dt){

@@ -1,7 +1,7 @@
 'use strict';
 
 // 計算と履歴の所有者。描画・タブの可視性に依存せず、自分のタイマーで進める。
-importScripts('cfd-core.js?v=worker-20260912-1', 'solver.js?v=worker-20260912-1');
+importScripts('cfd-core.js?v=worker-20260912-1', 'solver.js?v=hotpath-20260914-1');
 const initialized = CFDSolver.initialize();
 let solver, running = false, speed = 1, timer = null, revision = 0;
 const history = [];
@@ -42,7 +42,7 @@ function snapshot(includeGrid, afterIteration = -1) {
     coeffs:solver.coeffs, diagnostics:solver.diagnostics, cp:solver.cp};
   if (includeGrid) {
     for (const key of ['nx', 'ny', 'n', 'geometry', 'mach', 'aoa', 'reynolds', 'frictionModel',
-      'backend', 'cfl', 'xmin', 'xmax', 'ymin', 'ymax']) state[key] = solver[key];
+      'backend', 'cfl', 'xmin', 'xmax', 'ymin', 'ymax', 'gridReady']) state[key] = solver[key];
   }
   const transfers = [];
   for (const key of includeGrid ? [...dynamicFields, ...gridFields] : dynamicFields) {
@@ -60,11 +60,14 @@ async function handle(message) {
   if (type === 'configure') {
     stop();
     const c = message.config;
-    if (!solver || solver.nx !== c.nx || solver.ny !== c.ny) solver = new CFDSolver(c.nx, c.ny);
-    solver.geometry = {...c.geometry};
-    solver.reynolds = c.reynolds;
-    solver.frictionModel = c.frictionModel;
-    solver.reset(c.mach, c.aoa, true);
+    // 条件の補完は CFDSolver.applyConfig に一本化し、新規生成と再利用で同じ solver にする。
+    // 新規生成はコンストラクタ内の reset で反映されるため、どちらの経路も格子生成は1回。
+    if (!solver || solver.nx !== c.nx || solver.ny !== c.ny) {
+      solver = new CFDSolver(c.nx, c.ny, c);
+    } else {
+      solver.applyConfig(c);
+      solver.reset(solver.mach, solver.aoa, true);
+    }
     revision++;
     history.length = 0;
     recordHistory();
