@@ -4,3 +4,7 @@
 .vscode/
 build/
 dist/
+
+# Local handoff documents (not for publication)
+*HANDOFF*.md
+*handoff*.md
